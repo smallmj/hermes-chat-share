@@ -8,7 +8,15 @@ Share Hermes Desktop conversations as **long PNG screenshots, self-contained HTM
 
 ![Export sample](sample.png)
 
-## Install (one click)
+## Install
+
+> ✅ Officially listed in the **Hermes Agent plugin catalog** (community tier) — merged via [NousResearch/hermes-agent#144552](https://github.com/NousResearch/hermes-agent/pull/144552). Available in the docs at [hermes-agent.nousresearch.com/docs/plugins/hermes-chat-share](https://hermes-agent.nousresearch.com/docs/plugins/hermes-chat-share).
+
+**Option A — Desktop plugin market (recommended)**
+
+Hermes Desktop → **Capabilities → Plugins** → search **“Chat Share”** → **Install**. Version-pinned and integrity-checked by the official catalog.
+
+**Option B — Install from Git**
 
 Hermes Desktop → **Capabilities → Plugins → Install from Git** → paste:
 

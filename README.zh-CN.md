@@ -8,7 +8,15 @@
 
 ![导出样张](sample.png)
 
-## 安装（一键）
+## 安装
+
+> ✅ 已正式收录进 **Hermes Agent 官方插件目录**（community 层级）——经 [NousResearch/hermes-agent#144552](https://github.com/NousResearch/hermes-agent/pull/144552) 合并，官方文档页：[hermes-agent.nousresearch.com/docs/plugins/hermes-chat-share](https://hermes-agent.nousresearch.com/docs/plugins/hermes-chat-share)。
+
+**方式一：桌面插件市场（推荐）**
+
+Hermes Desktop → **Capabilities → Plugins** → 搜索 **「Chat Share」** → **Install**。版本由官方目录钉定，完整性有校验。
+
+**方式二：从 Git 安装**
 
 Hermes Desktop → **Capabilities → Plugins → Install from Git** → 填：
 
