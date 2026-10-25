@@ -340,6 +340,70 @@ function buildMetaLine (m) {
   if (m.version) b.push('Hermes ' + m.version)
   return b.join('  ·  ')
 }
+
+// Flatten a possibly-translucent CSS color over an opaque base. The macOS app
+// theme tokens (--card, --background) can carry alpha for window vibrancy;
+// a dialog over page text needs solid paint, so composite first.
+function parseCssRgba (s) {
+  const str = String(s == null ? '' : s).trim()
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(str)
+  if (hex) {
+    let h = hex[1]
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2]
+    return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16), a: 1 }
+  }
+  const rgb = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/i.exec(str)
+  if (rgb) {
+    const a = rgb[4] == null ? 1 : (String(rgb[4]).endsWith('%') ? parseFloat(rgb[4]) / 100 : parseFloat(rgb[4]))
+    return { r: +rgb[1], g: +rgb[2], b: +rgb[3], a: Number.isFinite(a) ? Math.min(1, Math.max(0, a)) : 1 }
+  }
+  return null
+}
+
+function solidColor (color, over) {
+  const c = parseCssRgba(color)
+  const o = parseCssRgba(over)
+  if (!c) return o ? color : '#ffffff'
+  if (c.a >= 1 || !o) return 'rgb(' + Math.round(c.r) + ',' + Math.round(c.g) + ',' + Math.round(c.b) + ')'
+  const m = (x, y) => Math.round(x * c.a + y * (1 - c.a))
+  return 'rgb(' + m(c.r, o.r) + ',' + m(c.g, o.g) + ',' + m(c.b, o.b) + ')'
+}
+
+function isDarkColor (color) {
+  const c = parseCssRgba(color)
+  if (!c) return false
+  return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b < 140
+}
+
+// Merge PNG pages into one tall image. Chromium canvas caps: side <= 65535,
+// area <= 268,435,456 px2. Returns null when over cap (caller falls back to
+// page-by-page downloads) — one download always beats three blocked ones,
+// because Electron silently drops every auto-download after the first.
+async function stitchPngs (blobs) {
+  const urls = []
+  try {
+    const imgs = []
+    for (const b of blobs) {
+      const u = URL.createObjectURL(b); urls.push(u)
+      const im = await new Promise((res, rej) => {
+        const i = new Image()
+        i.onload = () => res(i)
+        i.onerror = () => rej(new Error('page-decode-failed'))
+        i.src = u
+      })
+      imgs.push(im)
+    }
+    const W = imgs[0].width
+    const H = imgs.reduce((s, i) => s + i.height, 0)
+    if (H > 65500 || W * H > 268000000) return null
+    const c = document.createElement('canvas')
+    c.width = W; c.height = H
+    const g = c.getContext('2d')
+    let y = 0
+    for (const i of imgs) { g.drawImage(i, 0, y); y += i.height }
+    return await new Promise(res => c.toBlob(res, 'image/png'))
+  } finally { urls.forEach(u => URL.revokeObjectURL(u)) }
+}
 // ==== CORE END ====
 
 // -- stores ------------------------------------------------------------------
@@ -495,6 +559,22 @@ async function copyBlobToClipboard (blob) {
   return { via: ok ? 'selection' : null, stages }
 }
 
+// One download path for every PNG save. Multi-page exports are merged into a
+// single tall PNG when the canvas caps allow; Electron silently drops every
+// auto-download after the first, so page-by-page is only the last resort.
+async function saveImages (blobs) {
+  const base = fileBase()
+  if (blobs.length === 1) { download(blobs[0], base + '.png'); return 1 }
+  let stitched = null
+  try { stitched = await stitchPngs(blobs) } catch (e) { /* decode failed — fall through */ }
+  if (stitched) { download(stitched, base + '.png'); return 1 }
+  for (let k = 0; k < blobs.length; k++) {
+    download(blobs[k], base + '-' + String(k + 1).padStart(2, '0') + '.png')
+    await new Promise(r => setTimeout(r, 600))
+  }
+  return blobs.length
+}
+
 async function doCopyPng () {
   try {
     const imgs = await renderImages()
@@ -519,26 +599,37 @@ function AskModal () {
   const ask = useValue(askAtom)
   if (!ask) return null
   const close = () => askAtom.set(null)
-  const grab = () => {
-    const multi = ask.blobs.length > 1
-    ask.blobs.forEach((b, k) => download(b, fileBase() + (multi ? '-' + String(k + 1).padStart(2, '0') : '') + '.png'))
-    host.notify({ kind: 'success', message: t('saved') })
+  const grab = async () => {
+    try {
+      const n = await saveImages(ask.blobs)
+      host.notify({ kind: 'success', message: n > 1 ? t('savedN', n) : t('saved') })
+    } catch (err) { fail(err) }
     close()
   }
+  // Theme tokens can carry alpha (macOS window vibrancy) — flatten every
+  // paint to a solid color so the dialog never blends into page text.
+  const th = snapshotTheme(document.documentElement)
+  const pageBg = solidColor(th.bg, isDarkColor(th.bg) ? '#000000' : '#ffffff')
+  const dark = isDarkColor(pageBg)
+  const cardBg = solidColor(solidColor(th.card, pageBg), dark ? '#000000' : '#ffffff')
   return jsx('div', {
-    className: 'fixed inset-0 z-50 flex items-center justify-center',
-    style: { background: 'rgba(0,0,0,0.45)' },
+    className: 'fixed inset-0 flex items-center justify-center',
+    style: { background: 'rgba(0,0,0,0.5)', zIndex: 2147483000 },
     onClick: close,
     children: jsxs('div', {
-      className: 'rounded-xl border border-(--border) bg-(--card) p-5 mx-4 w-full max-w-[420px] flex flex-col gap-3',
-      style: { boxShadow: '0 12px 40px rgba(0,0,0,0.35)' },
+      className: 'p-5 mx-4 w-full max-w-[420px] flex flex-col gap-3',
+      style: {
+        background: cardBg, color: solidColor(th.fg, cardBg),
+        border: '1px solid ' + solidColor(th.border, cardBg), borderRadius: 12,
+        boxShadow: '0 12px 40px rgba(0,0,0,0.45)'
+      },
       onClick: e => e.stopPropagation(),
       children: [
         jsx('div', { className: 'font-medium text-sm', children: t('askTitle') }),
-        jsx('div', { className: 'text-xs text-(--muted-foreground) leading-relaxed', children: ask.reason }),
+        jsx('div', { className: 'text-xs leading-relaxed', style: { color: solidColor(th.muted, cardBg) }, children: ask.reason }),
         jsxs('div', { className: 'flex justify-end gap-2 mt-1', children: [
           jsx(Button, { size: 'sm', variant: 'text', onClick: close, children: t('btnCancel') }),
-          jsx(Button, { size: 'sm', onClick: grab, children: t('btnDownload') })
+          jsx(Button, { size: 'sm', onClick: () => void grab(), children: t('btnDownload') })
         ] })
       ]
     })
@@ -548,11 +639,9 @@ function AskModal () {
 async function doDownloadPng () {
   try {
     const imgs = await renderImages()
-    for (let k = 0; k < imgs.length; k++) {
-      download(imgs[k].blob, fileBase() + (imgs.length > 1 ? '-' + String(k + 1).padStart(2, '0') : '') + '.png')
-    }
+    const n = await saveImages(imgs.map(i => i.blob))
     haptic('success')
-    host.notify({ kind: 'success', message: t('saved') })
+    host.notify({ kind: 'success', message: n > 1 ? t('savedN', n) : t('saved') })
   } catch (err) { fail(err) }
 }
 
@@ -739,10 +828,10 @@ const STRINGS = {
     btnPng: 'Download PNG', btnCopyPng: 'Copy image',
     copied: 'Long image copied to clipboard',
     askTitle: 'Cannot copy to clipboard',
-    reasonMulti: n => 'This conversation exports as ' + n + ' tall pages, and the clipboard can only hold one image.',
+    reasonMulti: n => 'This conversation exports as ' + n + ' tall pages, and the clipboard can only hold one image. Downloading gives you one merged long PNG.',
     reasonBlocked: 'The desktop app blocks plugin clipboard writes (security policy).',
     btnCancel: 'Cancel', btnDownload: 'Download image',
-    saved: 'Saved', exportFailed: 'Export failed',
+    saved: 'Saved', savedN: n => n + ' files downloaded (too tall to merge into one PNG)', exportFailed: 'Export failed',
     turnsN: 'turns'
   },
   'zh': {
@@ -761,10 +850,10 @@ const STRINGS = {
     btnPng: '下载长图', btnCopyPng: '复制图片',
     copied: '长截图已复制到剪贴板',
     askTitle: '无法复制到粘贴板',
-    reasonMulti: n => '本次内容会导出为 ' + n + ' 页长图，粘贴板一次只能放一张图片。',
+    reasonMulti: n => '本次内容会导出为 ' + n + ' 页长图，粘贴板一次只能放一张图片；下载则会合并为一张长 PNG。',
     reasonBlocked: '桌面端权限策略阻止了插件写入剪贴板。',
     btnCancel: '取消', btnDownload: '下载图片',
-    saved: '已保存', exportFailed: '导出失败',
+    saved: '已保存', savedN: n => '已下载 ' + n + ' 个文件（长图过高，无法合并为一张）', exportFailed: '导出失败',
     turnsN: '轮'
   }
 }

@@ -17,3 +17,13 @@ assert.equal(buildMetaLine(normalizeSessionInfo({ usage: {} })), '')
 assert.equal(buildMetaLine(normalizeSessionInfo({ model: 'x', reasoning_effort: 'none' })), 'x')
 
 console.log('META_TEST_OK')
+
+// --- color solidification (dialog readability on vibrancy themes) ---
+const { parseCssRgba, solidColor, isDarkColor } = await import('./core.mjs')
+assert.deepEqual(parseCssRgba('#abc'), { r: 170, g: 187, b: 204, a: 1 })
+assert.deepEqual(parseCssRgba('rgba(30, 30, 34, 0.7)'), { r: 30, g: 30, b: 34, a: 0.7 })
+assert.equal(solidColor('rgba(30,30,34,0.7)', '#000000'), 'rgb(21,21,24)')
+assert.equal(solidColor('#fafafa', 'rgb(0,0,0)'), 'rgb(250,250,250)')
+assert.equal(isDarkColor('rgb(21,21,24)'), true)
+assert.equal(isDarkColor('rgb(250,250,250)'), false)
+console.log('COLOR_TEST_OK')

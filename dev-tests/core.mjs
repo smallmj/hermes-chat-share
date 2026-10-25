@@ -326,4 +326,68 @@ function buildMetaLine (m) {
   return b.join('  ·  ')
 }
 
-export { esc,baseName,mdToXhtml,inline,fmtTs,snapshotTheme,exportCss,turnXhtml,svgWrap,slugTitle,fragWithCss,buildPages,loadSvgImage,pageToPng,normalizeSessionInfo,buildMetaLine }
+// Flatten a possibly-translucent CSS color over an opaque base. The macOS app
+// theme tokens (--card, --background) can carry alpha for window vibrancy;
+// a dialog over page text needs solid paint, so composite first.
+function parseCssRgba (s) {
+  const str = String(s == null ? '' : s).trim()
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(str)
+  if (hex) {
+    let h = hex[1]
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2]
+    return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16), a: 1 }
+  }
+  const rgb = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/i.exec(str)
+  if (rgb) {
+    const a = rgb[4] == null ? 1 : (String(rgb[4]).endsWith('%') ? parseFloat(rgb[4]) / 100 : parseFloat(rgb[4]))
+    return { r: +rgb[1], g: +rgb[2], b: +rgb[3], a: Number.isFinite(a) ? Math.min(1, Math.max(0, a)) : 1 }
+  }
+  return null
+}
+
+function solidColor (color, over) {
+  const c = parseCssRgba(color)
+  const o = parseCssRgba(over)
+  if (!c) return o ? color : '#ffffff'
+  if (c.a >= 1 || !o) return 'rgb(' + Math.round(c.r) + ',' + Math.round(c.g) + ',' + Math.round(c.b) + ')'
+  const m = (x, y) => Math.round(x * c.a + y * (1 - c.a))
+  return 'rgb(' + m(c.r, o.r) + ',' + m(c.g, o.g) + ',' + m(c.b, o.b) + ')'
+}
+
+function isDarkColor (color) {
+  const c = parseCssRgba(color)
+  if (!c) return false
+  return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b < 140
+}
+
+// Merge PNG pages into one tall image. Chromium canvas caps: side <= 65535,
+// area <= 268,435,456 px2. Returns null when over cap (caller falls back to
+// page-by-page downloads) — one download always beats three blocked ones,
+// because Electron silently drops every auto-download after the first.
+async function stitchPngs (blobs) {
+  const urls = []
+  try {
+    const imgs = []
+    for (const b of blobs) {
+      const u = URL.createObjectURL(b); urls.push(u)
+      const im = await new Promise((res, rej) => {
+        const i = new Image()
+        i.onload = () => res(i)
+        i.onerror = () => rej(new Error('page-decode-failed'))
+        i.src = u
+      })
+      imgs.push(im)
+    }
+    const W = imgs[0].width
+    const H = imgs.reduce((s, i) => s + i.height, 0)
+    if (H > 65500 || W * H > 268000000) return null
+    const c = document.createElement('canvas')
+    c.width = W; c.height = H
+    const g = c.getContext('2d')
+    let y = 0
+    for (const i of imgs) { g.drawImage(i, 0, y); y += i.height }
+    return await new Promise(res => c.toBlob(res, 'image/png'))
+  } finally { urls.forEach(u => URL.revokeObjectURL(u)) }
+}
+
+export { esc,baseName,mdToXhtml,inline,fmtTs,snapshotTheme,exportCss,turnXhtml,svgWrap,slugTitle,fragWithCss,buildPages,loadSvgImage,pageToPng,normalizeSessionInfo,buildMetaLine,parseCssRgba,solidColor,isDarkColor,stitchPngs }
