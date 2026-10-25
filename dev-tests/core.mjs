@@ -138,17 +138,41 @@ function fmtTs (ts) {
 }
 
 // Read the app theme once, as concrete values passed into the export CSS.
-function snapshotTheme (docEl) {
-  const cs = getComputedStyle(docEl)
-  const v = n => (cs.getPropertyValue(n) || '').trim()
-  const bg = v('--background') || v('--ui-background') || '#ffffff'
-  const fg = v('--foreground') || v('--ui-text-primary') || '#111111'
-  const card = v('--card') || v('--ui-background-elevated') || bg
-  const border = v('--border') || v('--ui-stroke-secondary') || 'rgba(128,128,128,0.35)'
-  const accent = v('--accent') || v('--ui-accent') || fg
-  const muted = v('--muted-foreground') || v('--ui-text-secondary') || fg
-  const codeBg = v('--muted') || card
-  return { bg, fg, card, border, accent, muted, codeBg }
+function snapshotTheme () {
+  // CSS custom props on :root are declared as unresolved chains
+  // (`--background: var(--dt-background)`), so getPropertyValue returns the
+  // token, not a color. Probe REAL elements with inline var() styles and let
+  // the browser resolve the chain to a computed rgba().
+  const probe = css => {
+    const d = document.createElement('div')
+    d.style.cssText = 'position:fixed;left:-9999px;top:0;width:8px;height:8px;border-style:solid;border-width:1px;' + css
+    document.body.appendChild(d)
+    const cs = getComputedStyle(d)
+    const r = { bg: cs.backgroundColor, fg: cs.color, bd: cs.borderTopColor }
+    d.remove()
+    return r
+  }
+  const page = probe('background:var(--background);color:var(--foreground);border-color:var(--border)')
+  const cardP = probe('background:var(--card);border-color:var(--border)')
+  const accentP = probe('background:var(--accent)')
+  const mutedP = probe('color:var(--muted-foreground)')
+  const codeP = probe('background:var(--muted)')
+  const resolve = (c, fb, base) => {
+    const p = parseCssRgba(c)
+    if (!p || p.a === 0) return fb
+    return solidColor(c, base)
+  }
+  const bg = resolve(page.bg, '#ffffff', '#ffffff')
+  const card = resolve(cardP.bg, bg, bg)
+  return {
+    bg,
+    fg: resolve(page.fg, '#111111', bg),
+    card,
+    border: resolve(page.bd, 'rgba(128,128,128,0.35)', bg),
+    accent: resolve(accentP.bg, bg, bg),
+    muted: resolve(mutedP.fg, '#888888', bg),
+    codeBg: resolve(codeP.bg, card, card)
+  }
 }
 
 function exportCss (th, opt) {

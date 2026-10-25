@@ -153,17 +153,41 @@ function fmtTs (ts) {
 }
 
 // Read the app theme once, as concrete values passed into the export CSS.
-function snapshotTheme (docEl) {
-  const cs = getComputedStyle(docEl)
-  const v = n => (cs.getPropertyValue(n) || '').trim()
-  const bg = v('--background') || v('--ui-background') || '#ffffff'
-  const fg = v('--foreground') || v('--ui-text-primary') || '#111111'
-  const card = v('--card') || v('--ui-background-elevated') || bg
-  const border = v('--border') || v('--ui-stroke-secondary') || 'rgba(128,128,128,0.35)'
-  const accent = v('--accent') || v('--ui-accent') || fg
-  const muted = v('--muted-foreground') || v('--ui-text-secondary') || fg
-  const codeBg = v('--muted') || card
-  return { bg, fg, card, border, accent, muted, codeBg }
+function snapshotTheme () {
+  // CSS custom props on :root are declared as unresolved chains
+  // (`--background: var(--dt-background)`), so getPropertyValue returns the
+  // token, not a color. Probe REAL elements with inline var() styles and let
+  // the browser resolve the chain to a computed rgba().
+  const probe = css => {
+    const d = document.createElement('div')
+    d.style.cssText = 'position:fixed;left:-9999px;top:0;width:8px;height:8px;border-style:solid;border-width:1px;' + css
+    document.body.appendChild(d)
+    const cs = getComputedStyle(d)
+    const r = { bg: cs.backgroundColor, fg: cs.color, bd: cs.borderTopColor }
+    d.remove()
+    return r
+  }
+  const page = probe('background:var(--background);color:var(--foreground);border-color:var(--border)')
+  const cardP = probe('background:var(--card);border-color:var(--border)')
+  const accentP = probe('background:var(--accent)')
+  const mutedP = probe('color:var(--muted-foreground)')
+  const codeP = probe('background:var(--muted)')
+  const resolve = (c, fb, base) => {
+    const p = parseCssRgba(c)
+    if (!p || p.a === 0) return fb
+    return solidColor(c, base)
+  }
+  const bg = resolve(page.bg, '#ffffff', '#ffffff')
+  const card = resolve(cardP.bg, bg, bg)
+  return {
+    bg,
+    fg: resolve(page.fg, '#111111', bg),
+    card,
+    border: resolve(page.bd, 'rgba(128,128,128,0.35)', bg),
+    accent: resolve(accentP.bg, bg, bg),
+    muted: resolve(mutedP.fg, '#888888', bg),
+    codeBg: resolve(codeP.bg, card, card)
+  }
 }
 
 function exportCss (th, opt) {
@@ -791,30 +815,36 @@ function Toolbar () {
     navAtom.set({ ...cur, at })
     jumpToTurn(cur.ids[at], true)
   }
-  return jsxs('div', { className: 'flex flex-wrap items-center gap-2 px-4 py-2 border-b border-(--border) sticky top-0 bg-(--background) z-10', children: [
-    jsx('span', { className: 'text-sm text-(--muted-foreground)', children: t('selCount', selected.length, turns.length) }),
+  return jsxs('div', {
+    className: 'border-b border-(--border) sticky top-0 bg-(--background) z-10 flex flex-col gap-1.5 px-4 py-2',
+    children: [
+      jsxs('div', { className: 'flex items-center gap-2 flex-nowrap', children: [
+        jsx('span', { className: 'text-sm text-(--muted-foreground) shrink-0', style: { width: 130 }, children: t('selCount', selected.length, turns.length) }),
     jsx(Button, { size: 'xs', variant: 'text', onClick: () => setSel(null), children: t('selectAll') }),
     jsx(Button, { size: 'xs', variant: 'text', onClick: () => setSel([]), children: t('clearSel') }),
     jsx(Button, { size: 'xs', variant: 'text', onClick: () => setSel(turns.filter(x => !sel || !sel.has(x.id)).map(x => x.id)), children: t('invertSel') }),
-    jsxs('div', { className: 'flex items-center gap-1', children: [
       jsx('input', {
-        className: 'text-xs rounded-md border border-(--border) bg-transparent px-2 py-1 text-(--foreground)',
-        style: { width: 150 }, placeholder: t('searchPh'), value: q,
+        className: 'text-xs rounded-md border border-(--border) bg-transparent px-2 py-1 text-(--foreground) shrink-0',
+        style: { width: 220 }, placeholder: t('searchPh'), value: q,
         onChange: e => setQ(e.target.value),
         onKeyDown: e => { if (e.key === 'Enter') { e.preventDefault(); step(e.shiftKey ? -1 : 1) } }
       }),
-      nav.ids.length ? jsx('span', { className: 'text-xs text-(--muted-foreground)', children: (nav.at + 1) + '/' + nav.ids.length }) : (q.trim() ? jsx('span', { className: 'text-xs text-(--muted-foreground)', children: '0/' + 0 }) : null),
+      jsx('span', { className: 'text-xs text-(--muted-foreground) shrink-0 text-center', style: { width: 46 }, children: q.trim() ? (nav.at + 1) + '/' + nav.ids.length : '' }),
       jsx(Button, { size: 'xs', variant: 'text', onClick: () => step(-1), children: '↑' }),
-      jsx(Button, { size: 'xs', variant: 'text', onClick: () => step(1), children: '↓' })
-    ] }),
-    jsx('span', { className: 'mx-2 opacity-30', children: '│' }),
+      jsx(Button, { size: 'xs', variant: 'text', onClick: () => step(1), children: '↓' }),
+      ] }),
+      jsxs('div', { className: 'flex items-center gap-2 flex-nowrap', children: [
+        jsx('span', { className: 'text-xs text-(--muted-foreground) shrink-0', children: t('widthL') }),
     jsx('select', {
-      className: 'text-xs rounded-md border border-(--border) bg-transparent px-1.5 py-1 text-(--foreground)',
+      className: 'text-xs rounded-md border border-(--border) bg-transparent px-1.5 py-1 text-(--foreground) shrink-0',
+      style: { width: 100 },
       value: String(opt.width), onChange: e => setOpt({ width: Number(e.target.value) }),
       children: [680, 880, 1080].map(w => jsx('option', { value: String(w), children: t('widthN', w) }, w))
     }),
+    jsx('span', { className: 'text-xs text-(--muted-foreground) shrink-0 ml-1', children: t('fontL') }),
     jsx('select', {
-      className: 'text-xs rounded-md border border-(--border) bg-transparent px-1.5 py-1 text-(--foreground)',
+      className: 'text-xs rounded-md border border-(--border) bg-transparent px-1.5 py-1 text-(--foreground) shrink-0',
+      style: { width: 96 },
       value: String(opt.scale), onChange: e => setOpt({ scale: Number(e.target.value) }),
       children: [0.85, 1, 1.2].map(s => jsx('option', { value: String(s), children: t('fontN', Math.round(15 * s)) }, s))
     }),
@@ -844,9 +874,11 @@ function Toolbar () {
     jsx(Button, { size: 'sm', onClick: () => void doDownloadMd(), children: 'Markdown' }),
     jsx(Button, { size: 'sm', onClick: () => void doDownloadHtml(), children: 'HTML' }),
     jsx(Button, { size: 'sm', onClick: () => void doDownloadPng(), children: t('btnPng') }),
-    jsx(Button, { size: 'sm', onClick: () => void doCopyPng(), children: t('btnCopyPng') }),
-    ml ? jsx('div', { className: 'w-full text-xs text-(--muted-foreground)', children: ml }, 'meta') : null
-  ] })
+    jsx(Button, { size: 'sm', onClick: () => void doCopyPng(), children: t('btnCopyPng') })
+      ] }),
+      ml ? jsx('div', { className: 'text-xs text-(--muted-foreground)', children: ml }, 'meta') : null
+    ]
+  })
 }
 
 function SharePage () {
@@ -881,7 +913,7 @@ function SharePage () {
 
   return jsxs('div', { className: 'flex flex-col h-full min-h-0', children: [
     jsxs('div', { className: 'flex items-center gap-2 px-4 pt-3 pb-1', children: [
-      jsx('div', { className: 'font-medium text-sm', children: st.title || t('shareTitle') }),
+      jsx('div', { className: 'font-medium text-sm min-w-0 truncate whitespace-nowrap', children: st.title || t('shareTitle') }),
       st.sid ? jsx('span', { className: 'text-xs text-(--muted-foreground)', children: st.sid.slice(0, 8) + '…' }) : null,
       jsx('span', { className: 'flex-1' }),
       st.loading ? jsx(GlyphSpinner, { className: 'text-(--muted-foreground)' }) : null
@@ -929,6 +961,7 @@ const STRINGS = {
     saved: 'Saved', savedN: n => n + ' files downloaded (too tall to merge into one PNG)', exportFailed: 'Export failed',
     turnsN: 'turns',
     searchPh: 'search turns…',
+    widthL: 'Width', fontL: 'Font',
     expand: (a, b) => 'expand (' + a + ' more repl' + (a === 1 ? 'y' : 'ies') + (b ? ' · ' + b + ' tool calls' : '') + ')',
     collapse: 'collapse',
     fullLabel: 'share full conversation'
@@ -955,6 +988,7 @@ const STRINGS = {
     saved: '已保存', savedN: n => '已下载 ' + n + ' 个文件（长图过高，无法合并为一张）', exportFailed: '导出失败',
     turnsN: '轮',
     searchPh: '搜索对话内容…',
+    widthL: '宽度', fontL: '字号',
     expand: (a, b) => '展开（' + a + ' 条中间回复' + (b ? ' · ' + b + ' 个工具调用' : '') + '）',
     collapse: '收起',
     fullLabel: '分享完整对话'
