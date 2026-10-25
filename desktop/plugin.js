@@ -283,7 +283,9 @@ function loadSvgImage (svg, width) {
 }
 
 async function pageToPng (turns, th, opt) {
-  const body = '<div class="chsh-pad">' + turns.map(x => fragWithCss(x, th, opt)).join('') +
+  const headHtml = (opt.title ? '<div class="chsh-title">' + esc(opt.title) + '</div>' : '') +
+    (opt.metaLine ? '<div class="chsh-meta">' + esc(opt.metaLine) + '</div>' : '')
+  const body = '<div class="chsh-pad">' + headHtml + turns.map(x => fragWithCss(x, th, opt)).join('') +
     '<div class="chsh-foot">Hermes · ' + esc(fmtTs(Date.now() / 1000)) + '</div></div>'
   // one measurement pass for the exact page height, then rasterize
   const holder = document.createElement('div')
@@ -310,11 +312,40 @@ async function pageToPng (turns, th, opt) {
   if (!blob) throw new Error('png-encode-failed')
   return { blob, height }
 }
+// -- session meta (model / thinking level / cache / speed / Hermes version) ---
+// Pure helpers: normalizeSessionInfo maps the `session.info` RPC payload,
+// buildMetaLine renders one English line for page + exports. Fields the gateway
+// omits (archived session, no latency data) are omitted here too — never faked.
+function normalizeSessionInfo (info) {
+  if (!info || typeof info !== 'object') return null
+  const u = info.usage || {}
+  return {
+    model: String(info.model || u.model || ''), provider: String(info.provider || ''),
+    effort: String(info.reasoning_effort_wire || info.reasoning_effort || ''),
+    cacheHitPct: Number.isFinite(u.cache_hit_pct) ? u.cache_hit_pct : null,
+    avgTps: Number.isFinite(u.avg_tps) ? u.avg_tps : null,
+    totalTokens: Number.isFinite(u.total) ? u.total : null,
+    version: String(info.version || ''), releaseDate: String(info.release_date || '')
+  }
+}
+
+function buildMetaLine (m) {
+  if (!m) return ''
+  const b = []
+  if (m.model) b.push(m.provider ? m.model + ' @ ' + m.provider : m.model)
+  if (m.effort && m.effort !== 'none') b.push('thinking: ' + m.effort)
+  if (m.cacheHitPct != null) b.push('cache hit: ' + m.cacheHitPct + '%')
+  if (m.avgTps != null) b.push(m.avgTps + ' tok/s')
+  if (m.totalTokens) b.push(m.totalTokens.toLocaleString('en-US') + ' tokens')
+  if (m.version) b.push('Hermes ' + m.version)
+  return b.join('  ·  ')
+}
 // ==== CORE END ====
 
 // -- stores ------------------------------------------------------------------
 const turnsAtom = atom([])
 const stateAtom = atom({ loading: false, error: '', title: '', sid: '', total: 0 })
+const metaAtom = atom(null)
 const selAtom = atom(null) // null = all selected; Set-arrays of turn ids otherwise
 const optAtom = atom({ width: 880, scale: 1, tools: true, ts: true })
 
@@ -358,6 +389,11 @@ async function fetchTurnsFor (sid) {
     if (!res) throw lastErr || new Error('session.history unavailable')
     const messages = (res && res.messages) || []
     turnsAtom.set(groupTurns(messages))
+    let meta = null
+    try {
+      meta = normalizeSessionInfo(await host.request('session.info', { session_id: tried[tried.length - 1] }, 30000))
+    } catch (e) { /* archived / compute-host sessions may have no live info — meta line just shrinks */ }
+    metaAtom.set(meta)
     let title = ''
     try {
       const list = await host.request('session.list', { limit: 200 })
@@ -386,9 +422,15 @@ async function renderImages () {
   if (!turns.length) throw new Error('nothing-selected')
   const th = snapshotTheme(document.documentElement)
   const opt = optAtom.get()
+  // The first PNG page carries the title + session meta header (~50px). The
+  // chunking pass does not know about it; PAGE_MAX leaves >3500px of headroom
+  // under Chrome's 16384 device-px cap, so the extra line cannot overflow it.
+  const ml = buildMetaLine(metaAtom.get())
   const pages = buildPages(turns, th, opt)
   const out = []
-  for (const pg of pages) out.push(await pageToPng(pg, th, opt))
+  for (let k = 0; k < pages.length; k++) {
+    out.push(await pageToPng(pages[k], th, k === 0 ? { ...opt, title: stateAtom.get().title, metaLine: ml } : opt))
+  }
   return out
 }
 
@@ -471,9 +513,10 @@ function exportHtml (opts) {
   const turns = turnsAtom.get().filter(x => ids.has(x.id))
   const th = snapshotTheme(document.documentElement)
   const opt = { ...optAtom.get(), images: true }
+  const ml = buildMetaLine(metaAtom.get())
   const body = '<div class="chsh-wrap"><div class="chsh-pad">' +
     '<div class="chsh-title">' + esc(stateAtom.get().title || t('shareTitle')) + '</div>' +
-    '<div class="chsh-meta">' + esc(fmtTs(Date.now() / 1000)) + ' · ' + turns.length + ' ' + t('turnsN') + '</div>' +
+    '<div class="chsh-meta">' + esc(fmtTs(Date.now() / 1000)) + ' · ' + turns.length + ' ' + t('turnsN') + (ml ? ' · ' + esc(ml) : '') + '</div>' +
     turns.map(x => turnXhtml(x, { images: true, tools: opt.tools }, th)).join('') +
     '<div class="chsh-foot">Hermes</div></div></div>'
   const html = '<!DOCTYPE html><html><head><meta charset="utf-8"/><title>' + esc(stateAtom.get().title || 'Hermes') +
@@ -487,6 +530,8 @@ function exportMd () {
   const turns = turnsAtom.get().filter(x => ids.has(x.id))
   const opt = optAtom.get()
   let s = '# ' + (stateAtom.get().title || t('shareTitle')) + '\n\n_' + fmtTs(Date.now() / 1000) + '_\n\n'
+  const ml = buildMetaLine(metaAtom.get())
+  if (ml) s += '> ' + ml + '\n\n'
   for (const turn of turns) {
     if (turn.user && turn.user.text) s += '## 👤 ' + (turn.user.ts ? fmtTs(turn.user.ts) + ' · ' : '') + 'User\n\n' + turn.user.text + '\n\n'
     for (const a of turn.asst) s += '### 🤖 ' + (a.ts ? fmtTs(a.ts) + ' · ' : '') + 'Assistant\n\n' + a.text + '\n\n'
@@ -543,6 +588,7 @@ function Toolbar () {
   const t = usePluginI18n(PLUGIN_ID)
   const opt = useValue(optAtom)
   const st = useValue(stateAtom)
+  const ml = buildMetaLine(useValue(metaAtom))
   const turns = useValue(turnsAtom)
   const sel = useValue(selAtom)
   const selected = sel ? turns.filter(x => sel.has(x.id)) : turns
@@ -564,15 +610,23 @@ function Toolbar () {
       value: String(opt.scale), onChange: e => setOpt({ scale: Number(e.target.value) }),
       children: [0.85, 1, 1.2].map(s => jsx('option', { value: String(s), children: t('fontN', Math.round(15 * s)) }, s))
     }),
-    jsx(Button, {
-      size: 'xs', variant: opt.tools ? 'secondary' : 'text',
-      onClick: () => setOpt({ tools: !opt.tools }), children: t('toggleTools')
+    jsx('label', {
+      className: 'flex items-center gap-1.5 text-xs text-(--foreground) cursor-pointer select-none',
+      children: [
+        jsx('input', {
+          type: 'checkbox', checked: !!opt.tools,
+          onChange: () => setOpt({ tools: !opt.tools }),
+          className: 'size-3.5 accent-(--accent)'
+        }),
+        t('toggleTools')
+      ]
     }),
     jsx('span', { className: 'flex-1' }),
     jsx(Button, { size: 'sm', onClick: () => void doDownloadMd(), children: 'Markdown' }),
     jsx(Button, { size: 'sm', onClick: () => void doDownloadHtml(), children: 'HTML' }),
     jsx(Button, { size: 'sm', onClick: () => void doDownloadPng(), children: t('btnPng') }),
-    jsx(Tip, { label: t('copyHint'), children: jsx(Button, { size: 'sm', variant: 'secondary', onClick: () => void doCopyPng(), children: t('btnCopyPng') }) })
+    jsx(Tip, { label: t('copyHint'), children: jsx(Button, { size: 'sm', variant: 'secondary', onClick: () => void doCopyPng(), children: t('btnCopyPng') }) }),
+    ml ? jsx('div', { className: 'w-full text-xs text-(--muted-foreground)', children: ml }, 'meta') : null
   ] })
 }
 
