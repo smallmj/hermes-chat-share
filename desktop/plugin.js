@@ -403,11 +403,48 @@ function download (blob, name) {
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove() }, 4000)
 }
 
+// Fallback path: Hermes Electron denies clipboard-sanitized-write to every
+// non-Skills-Hub origin (electron/main.ts installMediaPermissions), so
+// navigator.clipboard.write throws NotAllowedError in plugin renderers on all
+// platforms. execCommand('copy') on a selected real <img> writes bitmap
+// flavors to the pasteboard and is not gated by that permission handler.
+async function copyBlobToClipboard (blob) {
+  try {
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+    return 'api'
+  } catch { /* denied by desktop policy — fall through to the selection path */ }
+  const url = URL.createObjectURL(blob)
+  const box = document.createElement('div')
+  box.contentEditable = 'true'
+  box.style.cssText = 'position:fixed;left:-99999px;top:0;opacity:0'
+  const img = document.createElement('img')
+  img.src = url
+  await new Promise(r => { img.onload = r; img.onerror = r })
+  box.appendChild(img)
+  document.body.appendChild(box)
+  const sel = window.getSelection()
+  const range = document.createRange()
+  range.selectNodeContents(box)
+  sel.removeAllRanges(); sel.addRange(range)
+  let ok = false
+  try { ok = document.execCommand('copy') } finally {
+    sel.removeAllRanges(); box.remove(); URL.revokeObjectURL(url)
+  }
+  return ok ? 'selection' : null
+}
+
 async function doCopyPng () {
   try {
     const imgs = await renderImages()
     if (imgs.length > 1) { for (let k = 0; k < imgs.length; k++) download(imgs[k].blob, fileBase() + '-' + String(k + 1).padStart(2, '0') + '.png') }
-    else await navigator.clipboard.write([new ClipboardItem({ 'image/png': imgs[0].blob })])
+    else {
+      const via = await copyBlobToClipboard(imgs[0].blob)
+      if (!via) {
+        const e = new Error(t('copyBlocked'))
+        e.fallbackBlob = imgs[0].blob
+        throw e
+      }
+    }
     haptic('success')
     host.notify({ kind: 'success', message: imgs.length > 1 ? t('multiPage') : t('copied') })
   } catch (err) { fail(err) }
@@ -460,6 +497,8 @@ function doDownloadMd () { try { download(exportMd(), fileBase() + '.md'); host.
 function fail (err) {
   const msg = String((err && err.message) || err)
   host.notify({ kind: 'error', message: t('exportFailed') + ': ' + msg })
+  // Clipboard fully blocked (both paths): hand the user the file instead.
+  if (err && err.fallbackBlob) download(err.fallbackBlob, fileBase() + '.png')
 }
 
 // -- UI ------------------------------------------------------------------------
@@ -591,6 +630,7 @@ const STRINGS = {
     btnPng: 'Download PNG', btnCopyPng: 'Copy image',
     copyHint: 'Copy the long screenshot to the clipboard (multi-page conversations download instead)',
     copied: 'Long image copied to clipboard',
+    copyBlocked: 'Clipboard blocked by desktop policy — downloaded the PNG instead',
     multiPage: 'Conversation spans several images — saved as files',
     saved: 'Saved', exportFailed: 'Export failed',
     turnsN: 'turns'
@@ -611,6 +651,7 @@ const STRINGS = {
     btnPng: '下载长图', btnCopyPng: '复制图片',
     copyHint: '把长截图复制到剪贴板（多页时改为下载文件）',
     copied: '长截图已复制到剪贴板',
+    copyBlocked: '剪贴板被桌面端权限策略拦截，已改为下载长图',
     multiPage: '内容跨多页，已作为图片文件保存',
     saved: '已保存', exportFailed: '导出失败',
     turnsN: '轮'
