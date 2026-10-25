@@ -15,7 +15,7 @@
 - 按轮次多选：全选 / 清空 / 反选；保留 Markdown、代码块、表格、引用、工具调用圆片（**checkbox 开关**）、时间戳
 - 图片宽度 680 / 880 / 1080px 三档，字号三档，主题配色自动快照当前 App 主题
 - 长图超过 ~7600px 自动分页（文件名 `-01`、`-02`…，2× DPR 高清）
-- 「复制图片」进剪贴板（走内联 base64 的富文本通道，WPS/Word 等富文本目标可直接粘贴；受桌面端剪贴板策略限制时通知会标明卡点，不会偷偷变成下载）；「下载长图 / HTML / Markdown」走系统下载
+- 「复制图片」进剪贴板（走内联 base64 的富文本通道，WPS/Word 等富文本目标可直接粘贴；无法复制时——内容跨页或桌面端权限拦截——会弹窗说明原因，由你选择「下载图片」或「取消」，不会擅自替你下载）；「下载长图 / HTML / Markdown」走系统下载
 - 长图中外链图片、附件（`MEDIA:`）、内嵌组件（`::preview`）替换为占位标签；HTML 导出保留图片链接
 - 界面中英文随 App 语言切换
 
@@ -54,7 +54,7 @@ Select conversation turns and export them as a **long PNG screenshot, self-conta
 - Per-turn selection (all / none / invert); keeps markdown, code blocks, tables, quotes, tool-call chips, timestamps
 - Image width 680 / 880 / 1080 px, three font scales, colors snapshot your current app theme
 - Auto-paginates tall exports (`-01`, `-02`, …) at 2× DPR
-- Copy image to clipboard, or download PNG / HTML / Markdown
+- Copy image to clipboard (rich-text channel with inline base64); when copying is impossible — multi-page export or the desktop clipboard policy — a dialog explains why and offers Download vs Cancel, never silently downloading
 - External images, `MEDIA:` attachments and `::preview` widgets become placeholders in PNG (HTML/MD keep them)
 - UI follows the app language (en / 简体中文)
 

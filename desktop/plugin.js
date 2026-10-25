@@ -347,6 +347,7 @@ const turnsAtom = atom([])
 const stateAtom = atom({ loading: false, error: '', title: '', sid: '', total: 0 })
 const metaAtom = atom(null)
 const selAtom = atom(null) // null = all selected; Set-arrays of turn ids otherwise
+const askAtom = atom(null) // { blobs: Blob[], reason: string } — copy failed/impossible, ask the user
 const optAtom = atom({ width: 880, scale: 1, tools: true, ts: true })
 
 const t = (key, ...args) => ctxI18nRef && ctxI18nRef.t(key, ...args)
@@ -498,17 +499,50 @@ async function doCopyPng () {
   try {
     const imgs = await renderImages()
     if (imgs.length > 1) {
-      // A multi-page tall export cannot sit on the pasteboard as one image;
-      // hand over files, and say so plainly (no surprise "silent downloads").
-      for (let k = 0; k < imgs.length; k++) download(imgs[k].blob, fileBase() + '-' + String(k + 1).padStart(2, '0') + '.png')
-      host.notify({ kind: 'info', message: t('multiPage', imgs.length) })
+      // Clipboard holds one image; a multi-page export cannot be copied whole.
+      // Don't decide for the user — explain and offer download vs cancel.
+      askAtom.set({ blobs: imgs.map(i => i.blob), reason: t('reasonMulti', imgs.length) })
       return
     }
     const r = await copyBlobToClipboard(imgs[0].blob)
-    if (!r.via) throw new Error(t('copyBlocked') + ' [' + r.stages.join(' → ') + ']')
+    if (!r.via) {
+      askAtom.set({ blobs: [imgs[0].blob], reason: t('reasonBlocked') + ' [' + r.stages.join(' → ') + ']' })
+      return
+    }
     haptic('success')
     host.notify({ kind: 'success', message: t('copied') })
   } catch (err) { fail(err) }
+}
+
+function AskModal () {
+  const t = usePluginI18n(PLUGIN_ID)
+  const ask = useValue(askAtom)
+  if (!ask) return null
+  const close = () => askAtom.set(null)
+  const grab = () => {
+    const multi = ask.blobs.length > 1
+    ask.blobs.forEach((b, k) => download(b, fileBase() + (multi ? '-' + String(k + 1).padStart(2, '0') : '') + '.png'))
+    host.notify({ kind: 'success', message: t('saved') })
+    close()
+  }
+  return jsx('div', {
+    className: 'fixed inset-0 z-50 flex items-center justify-center',
+    style: { background: 'rgba(0,0,0,0.45)' },
+    onClick: close,
+    children: jsxs('div', {
+      className: 'rounded-xl border border-(--border) bg-(--card) p-5 mx-4 w-full max-w-[420px] flex flex-col gap-3',
+      style: { boxShadow: '0 12px 40px rgba(0,0,0,0.35)' },
+      onClick: e => e.stopPropagation(),
+      children: [
+        jsx('div', { className: 'font-medium text-sm', children: t('askTitle') }),
+        jsx('div', { className: 'text-xs text-(--muted-foreground) leading-relaxed', children: ask.reason }),
+        jsxs('div', { className: 'flex justify-end gap-2 mt-1', children: [
+          jsx(Button, { size: 'sm', variant: 'text', onClick: close, children: t('btnCancel') }),
+          jsx(Button, { size: 'sm', onClick: grab, children: t('btnDownload') })
+        ] })
+      ]
+    })
+  })
 }
 
 async function doDownloadPng () {
@@ -673,6 +707,7 @@ function SharePage () {
       st.loading ? jsx(GlyphSpinner, { className: 'text-(--muted-foreground)' }) : null
     ] }),
     jsx(Toolbar, {}),
+    jsx(AskModal, {}),
     st.error ? jsxs('div', { className: 'p-6 flex flex-col items-start gap-3', children: [
       jsx(EmptyState, { title: t('loadFail'), description: st.error === 'no-focused-session' ? t('needSession') : st.error }),
       jsx(Button, { size: 'sm', onClick: () => void fetchTurns(), children: t('retry') })
@@ -703,8 +738,10 @@ const STRINGS = {
     toggleTools: 'tool calls',
     btnPng: 'Download PNG', btnCopyPng: 'Copy image',
     copied: 'Long image copied to clipboard',
-    copyBlocked: 'Clipboard copy refused by desktop policy',
-    multiPage: n => 'Clipboard holds one image — conversation spans ' + n + ' pages, saved as ' + n + ' files instead',
+    askTitle: 'Cannot copy to clipboard',
+    reasonMulti: n => 'This conversation exports as ' + n + ' tall pages, and the clipboard can only hold one image.',
+    reasonBlocked: 'The desktop app blocks plugin clipboard writes (security policy).',
+    btnCancel: 'Cancel', btnDownload: 'Download image',
     saved: 'Saved', exportFailed: 'Export failed',
     turnsN: 'turns'
   },
@@ -723,8 +760,10 @@ const STRINGS = {
     toggleTools: '工具调用',
     btnPng: '下载长图', btnCopyPng: '复制图片',
     copied: '长截图已复制到剪贴板',
-    copyBlocked: '剪贴板复制被桌面端权限策略拒绝',
-    multiPage: n => '剪贴板只能放一张图——本次内容跨 ' + n + ' 页，已改为保存 ' + n + ' 个文件',
+    askTitle: '无法复制到粘贴板',
+    reasonMulti: n => '本次内容会导出为 ' + n + ' 页长图，粘贴板一次只能放一张图片。',
+    reasonBlocked: '桌面端权限策略阻止了插件写入剪贴板。',
+    btnCancel: '取消', btnDownload: '下载图片',
     saved: '已保存', exportFailed: '导出失败',
     turnsN: '轮'
   }
