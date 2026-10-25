@@ -214,12 +214,14 @@ function turnXhtml (turn, opt, th) {
       (turn.user.ts ? '<span class="chsh-ts">' + fmtTs(turn.user.ts) + '</span>' : '') + '</div>' +
       '<div class="chsh-body">' + mdToXhtml(turn.user.text, { images: opt.images }) + '</div></div>'
   }
-  for (const a of turn.asst) {
+  // full === false → keep only the final assistant reply, drop tool chips
+  const assts = opt.full === false && turn.asst.length ? [turn.asst[turn.asst.length - 1]] : turn.asst
+  for (const a of assts) {
     s += '<div class="chsh-asst"><div class="chsh-who">🤖' +
       (a.ts ? '<span class="chsh-ts">' + fmtTs(a.ts) + '</span>' : '') + '</div>' +
       '<div class="chsh-body">' + mdToXhtml(a.text, { images: opt.images }) + '</div></div>'
   }
-  if (opt.tools && turn.tools.length) {
+  if (opt.tools && opt.full !== false && turn.tools.length) {
     s += '<div class="chsh-tools">' + turn.tools.map(t =>
       '<span class="chsh-tool">🔧 ' + esc(t.name) + '</span>').join('') + '</div>'
   }
@@ -242,7 +244,7 @@ function slugTitle (s) {
 const PAGE_MAX = 7600 // CSS px per PNG page (x2 DPR stays under Chrome's 16384 cap)
 
 function fragWithCss (turn, th, opt) {
-  return turnXhtml(turn, { images: false, tools: opt.tools }, th)
+  return turnXhtml(turn, { images: false, tools: opt.tools, full: opt.full }, th)
 }
 
 function buildPages (turns, th, opt) {
@@ -411,8 +413,12 @@ const turnsAtom = atom([])
 const stateAtom = atom({ loading: false, error: '', title: '', sid: '', total: 0 })
 const metaAtom = atom(null)
 const selAtom = atom(null) // null = all selected; Set-arrays of turn ids otherwise
+const expAtom = atom(new Set()) // turn ids expanded (showing middle replies + tools) in the picker UI
+const qAtom = atom('') // search query
+const navAtom = atom({ ids: [], at: -1 }) // search hits (turn ids) + current position
+const activeAtom = atom(null) // turn id highlighted by search/gutter jump
 const askAtom = atom(null) // { blobs: Blob[], reason: string } — copy failed/impossible, ask the user
-const optAtom = atom({ width: 880, scale: 1, tools: true, ts: true })
+const optAtom = atom({ width: 880, scale: 1, tools: true, ts: true, full: true })
 
 const t = (key, ...args) => ctxI18nRef && ctxI18nRef.t(key, ...args)
 let ctxI18nRef = null
@@ -467,6 +473,7 @@ async function fetchTurnsFor (sid) {
       if (hit) title = hit.title || hit.name || ''
     } catch (e) { /* title is cosmetic */ }
     selAtom.set(null)
+    expAtom.set(new Set()); qAtom.set(''); navAtom.set({ ids: [], at: -1 }); activeAtom.set(null); rowEls.clear()
     stateAtom.set({ loading: false, error: '', sid, title, total: messages.length })
   } catch (err) {
     stateAtom.set({ ...stateAtom.get(), loading: false, error: String((err && err.message) || err) })
@@ -654,7 +661,7 @@ function exportHtml (opts) {
   const body = '<div class="chsh-wrap"><div class="chsh-pad">' +
     '<div class="chsh-title">' + esc(stateAtom.get().title || t('shareTitle')) + '</div>' +
     '<div class="chsh-meta">' + esc(fmtTs(Date.now() / 1000)) + ' · ' + turns.length + ' ' + t('turnsN') + (ml ? ' · ' + esc(ml) : '') + '</div>' +
-    turns.map(x => turnXhtml(x, { images: true, tools: opt.tools }, th)).join('') +
+    turns.map(x => turnXhtml(x, { images: true, tools: opt.tools, full: opt.full }, th)).join('') +
     '<div class="chsh-foot">Hermes</div></div></div>'
   const html = '<!DOCTYPE html><html><head><meta charset="utf-8"/><title>' + esc(stateAtom.get().title || 'Hermes') +
     '</title><style>body{margin:0;background:' + th.bg + ';}' + exportCss(th, { ...opt, images: true }) +
@@ -671,8 +678,9 @@ function exportMd () {
   if (ml) s += '> ' + ml + '\n\n'
   for (const turn of turns) {
     if (turn.user && turn.user.text) s += '## 👤 ' + (turn.user.ts ? fmtTs(turn.user.ts) + ' · ' : '') + 'User\n\n' + turn.user.text + '\n\n'
-    for (const a of turn.asst) s += '### 🤖 ' + (a.ts ? fmtTs(a.ts) + ' · ' : '') + 'Assistant\n\n' + a.text + '\n\n'
-    if (opt.tools && turn.tools.length) s += turn.tools.map(x => '- 🔧 `' + x.name + '`' + (x.ctx ? ' — ' + x.ctx : '')).join('\n') + '\n\n'
+    const assts = opt.full === false ? turn.asst.slice(-1) : turn.asst
+    for (const a of assts) s += '### 🤖 ' + (a.ts ? fmtTs(a.ts) + ' · ' : '') + 'Assistant\n\n' + a.text + '\n\n'
+    if (opt.tools && opt.full !== false && turn.tools.length) s += turn.tools.map(x => '- 🔧 `' + x.name + '`' + (x.ctx ? ' — ' + x.ctx : '')).join('\n') + '\n\n'
     s += '---\n\n'
   }
   return new Blob([s], { type: 'text/markdown;charset=utf-8' })
@@ -687,11 +695,48 @@ function fail (err) {
 }
 
 // -- UI ------------------------------------------------------------------------
-function TurnRow ({ turn, checked, onToggle }) {
+// -- turn navigation -----------------------------------------------------------
+const rowEls = new Map() // turn id -> row DOM element
+
+function jumpToTurn (id, expand) {
+  if (expand) { const s = new Set(expAtom.get()); s.add(id); expAtom.set(s) }
+  activeAtom.set(id)
+  const el = rowEls.get(id)
+  if (el) el.scrollIntoView({ block: 'start', behavior: 'smooth' })
+}
+
+// Hermes-chat-style segmented gutter: one tick per turn, click to jump.
+function Gutter ({ turns }) {
+  const activeId = useValue(activeAtom)
+  if (turns.length < 2) return null
+  const gap = turns.length > 40 ? 1 : 2
+  return jsx('div', {
+    className: 'absolute top-3 bottom-3 right-0 w-[10px] flex flex-col z-30',
+    style: { gap: gap + 'px' },
+    children: turns.map(x => {
+      const snippet = (((x.user && x.user.text) || (x.asst[0] && x.asst[0].text) || '') + '').replace(/\s+/g, ' ').slice(0, 48)
+      return jsx('div', {
+        role: 'button',
+        title: (x.id + 1) + '. ' + snippet,
+        onClick: () => jumpToTurn(x.id),
+        className: 'flex-1 min-h-[2px] rounded-full',
+        style: { background: x.id === activeId ? 'var(--accent)' : 'var(--border)', cursor: 'pointer' }
+      }, 'g' + x.id)
+    })
+  })
+}
+
+function TurnRow ({ turn, checked, onToggle, expanded, onExpand, active }) {
   const t = usePluginI18n(PLUGIN_ID)
   const opt = useValue(optAtom)
+  const mid = Math.max(0, turn.asst.length - 1)
+  const showAsst = expanded ? turn.asst : (turn.asst.length ? [turn.asst[turn.asst.length - 1]] : [])
+  const showTools = expanded && opt.tools && turn.tools.length
+  const collapsible = mid > 0 || turn.tools.length > 0
   return jsxs('div', {
+    ref: el => { if (el) rowEls.set(turn.id, el); else rowEls.delete(turn.id) },
     className: 'flex gap-3 py-3 border-b border-(--border)',
+    style: active ? { boxShadow: 'inset 0 0 0 2px var(--accent)', borderRadius: 10 } : undefined,
     children: [
       jsx('input', {
         type: 'checkbox', className: 'mt-2 shrink-0 accent-(--accent)',
@@ -705,15 +750,16 @@ function TurnRow ({ turn, checked, onToggle }) {
           ] }),
           jsx(MessageTextContent, { text: turn.user.text })
         ] }) : null,
-        turn.asst.map((a, k) => jsxs('div', { className: 'min-w-0', children: [
+        showAsst.map((a, k) => jsxs('div', { className: 'min-w-0', children: [
           jsxs('div', { className: 'text-xs text-(--muted-foreground) mb-1 mt-2 flex gap-2', children: [
             jsx('span', { className: 'font-medium', children: t('labelAssistant') }),
             a.ts ? jsx('span', { children: fmtTs(a.ts) }) : null
           ] }),
           jsx('div', { className: 'min-w-0 overflow-hidden', children: jsx(MessageTextContent, { text: a.text }) })
         ] }, k)),
-        opt.tools && turn.tools.length ? jsx('div', { className: 'flex flex-wrap gap-1 pt-1', children: turn.tools.map((x, k) =>
-          jsx('span', { className: 'text-[11px] px-2 py-0.5 rounded-full border border-(--border) text-(--muted-foreground)', children: '🔧 ' + x.name }, k)) }) : null
+        showTools ? jsx('div', { className: 'flex flex-wrap gap-1 pt-1', children: turn.tools.map((x, k) =>
+          jsx('span', { className: 'text-[11px] px-2 py-0.5 rounded-full border border-(--border) text-(--muted-foreground)', children: '🔧 ' + x.name }, k)) }) : null,
+        collapsible ? jsx(Button, { size: 'xs', variant: 'text', onClick: () => onExpand(turn.id), children: expanded ? t('collapse') : t('expand', mid, turn.tools.length) }) : null
       ] })
     ]
   })
@@ -729,11 +775,38 @@ function Toolbar () {
   const selected = sel ? turns.filter(x => sel.has(x.id)) : turns
   const setOpt = patch => optAtom.set({ ...optAtom.get(), ...patch })
   const setSel = ids => selAtom.set(ids == null ? null : new Set(ids))
+  const q = useValue(qAtom)
+  const nav = useValue(navAtom)
+  const setQ = v => {
+    qAtom.set(v)
+    const s = String(v).trim().toLowerCase()
+    const ids = !s ? [] : turns.filter(x => (((x.user && x.user.text) || '') + '\n' + x.asst.map(a => a.text).join('\n')).toLowerCase().includes(s)).map(x => x.id)
+    navAtom.set({ ids, at: -1 })
+    if (!ids.length) activeAtom.set(null)
+  }
+  const step = d => {
+    const cur = navAtom.get()
+    if (!cur.ids.length) return
+    const at = (cur.at + d + cur.ids.length) % cur.ids.length
+    navAtom.set({ ...cur, at })
+    jumpToTurn(cur.ids[at], true)
+  }
   return jsxs('div', { className: 'flex flex-wrap items-center gap-2 px-4 py-2 border-b border-(--border) sticky top-0 bg-(--background) z-10', children: [
     jsx('span', { className: 'text-sm text-(--muted-foreground)', children: t('selCount', selected.length, turns.length) }),
     jsx(Button, { size: 'xs', variant: 'text', onClick: () => setSel(null), children: t('selectAll') }),
     jsx(Button, { size: 'xs', variant: 'text', onClick: () => setSel([]), children: t('clearSel') }),
     jsx(Button, { size: 'xs', variant: 'text', onClick: () => setSel(turns.filter(x => !sel || !sel.has(x.id)).map(x => x.id)), children: t('invertSel') }),
+    jsxs('div', { className: 'flex items-center gap-1', children: [
+      jsx('input', {
+        className: 'text-xs rounded-md border border-(--border) bg-transparent px-2 py-1 text-(--foreground)',
+        style: { width: 150 }, placeholder: t('searchPh'), value: q,
+        onChange: e => setQ(e.target.value),
+        onKeyDown: e => { if (e.key === 'Enter') { e.preventDefault(); step(e.shiftKey ? -1 : 1) } }
+      }),
+      nav.ids.length ? jsx('span', { className: 'text-xs text-(--muted-foreground)', children: (nav.at + 1) + '/' + nav.ids.length }) : (q.trim() ? jsx('span', { className: 'text-xs text-(--muted-foreground)', children: '0/' + 0 }) : null),
+      jsx(Button, { size: 'xs', variant: 'text', onClick: () => step(-1), children: '↑' }),
+      jsx(Button, { size: 'xs', variant: 'text', onClick: () => step(1), children: '↓' })
+    ] }),
     jsx('span', { className: 'mx-2 opacity-30', children: '│' }),
     jsx('select', {
       className: 'text-xs rounded-md border border-(--border) bg-transparent px-1.5 py-1 text-(--foreground)',
@@ -755,7 +828,18 @@ function Toolbar () {
         }),
         t('toggleTools')
       ]
-    }),
+    }, 'tools'),
+    jsx('label', {
+      className: 'flex items-center gap-1.5 text-xs text-(--foreground) cursor-pointer select-none',
+      children: [
+        jsx('input', {
+          type: 'checkbox', checked: opt.full !== false,
+          onChange: () => setOpt({ full: !opt.full }),
+          className: 'size-3.5 accent-(--accent)'
+        }),
+        t('fullLabel')
+      ]
+    }, 'full'),
     jsx('span', { className: 'flex-1' }),
     jsx(Button, { size: 'sm', onClick: () => void doDownloadMd(), children: 'Markdown' }),
     jsx(Button, { size: 'sm', onClick: () => void doDownloadHtml(), children: 'HTML' }),
@@ -770,6 +854,8 @@ function SharePage () {
   const st = useValue(stateAtom)
   const turns = useValue(turnsAtom)
   const sel = useValue(selAtom)
+  const exp = useValue(expAtom)
+  const activeId = useValue(activeAtom)
   // Follow whatever conversation the user is looking at: switching sessions in
   // the sidebar re-fetches automatically — no manual Refresh round-trip.
   const focus = useValue(host.state.focusedStoredSessionId)
@@ -787,6 +873,11 @@ function SharePage () {
     if (set.has(id)) set.delete(id); else set.add(id)
     selAtom.set(set)
   }
+  const toggleExpand = id => {
+    const set = new Set(expAtom.get())
+    if (set.has(id)) set.delete(id); else set.add(id)
+    expAtom.set(set)
+  }
 
   return jsxs('div', { className: 'flex flex-col h-full min-h-0', children: [
     jsxs('div', { className: 'flex items-center gap-2 px-4 pt-3 pb-1', children: [
@@ -803,10 +894,14 @@ function SharePage () {
     ] }) : !turns.length && !st.loading ? jsxs('div', { className: 'p-6 flex flex-col items-start gap-3', children: [
       jsx(EmptyState, { title: t('empty') }),
       jsx(Button, { size: 'sm', onClick: () => void fetchTurns(), children: t('retry') })
-    ] }) : jsx('div', { className: 'flex-1 min-h-0 overflow-y-auto px-4', children: jsx('div', { className: 'mx-auto w-full max-w-[880px]', children:
-      turns.map(turn => jsx(TurnRow, {
-        turn, checked: sel == null ? true : sel.has(turn.id), onToggle: toggle
-      }, turn.id)) }) })
+    ] }) : jsx('div', { className: 'flex-1 min-h-0 relative', children: [
+      jsx('div', { className: 'h-full overflow-y-auto px-4 pr-5', children: jsx('div', { className: 'mx-auto w-full max-w-[880px]', children:
+        turns.map(turn => jsx(TurnRow, {
+          turn, checked: sel == null ? true : sel.has(turn.id), onToggle: toggle,
+          expanded: exp.has(turn.id), onExpand: toggleExpand, active: turn.id === activeId
+        }, turn.id)) }) }),
+      jsx(Gutter, { turns })
+    ] })
   ] })
 }
 
@@ -832,7 +927,11 @@ const STRINGS = {
     reasonBlocked: 'The desktop app blocks plugin clipboard writes (security policy).',
     btnCancel: 'Cancel', btnDownload: 'Download image',
     saved: 'Saved', savedN: n => n + ' files downloaded (too tall to merge into one PNG)', exportFailed: 'Export failed',
-    turnsN: 'turns'
+    turnsN: 'turns',
+    searchPh: 'search turns…',
+    expand: (a, b) => 'expand (' + a + ' more repl' + (a === 1 ? 'y' : 'ies') + (b ? ' · ' + b + ' tool calls' : '') + ')',
+    collapse: 'collapse',
+    fullLabel: 'share full conversation'
   },
   'zh': {
     navLabel: '分享对话',
@@ -854,7 +953,11 @@ const STRINGS = {
     reasonBlocked: '桌面端权限策略阻止了插件写入剪贴板。',
     btnCancel: '取消', btnDownload: '下载图片',
     saved: '已保存', savedN: n => '已下载 ' + n + ' 个文件（长图过高，无法合并为一张）', exportFailed: '导出失败',
-    turnsN: '轮'
+    turnsN: '轮',
+    searchPh: '搜索对话内容…',
+    expand: (a, b) => '展开（' + a + ' 条中间回复' + (b ? ' · ' + b + ' 个工具调用' : '') + '）',
+    collapse: '收起',
+    fullLabel: '分享完整对话'
   }
 }
 

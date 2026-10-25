@@ -199,12 +199,14 @@ function turnXhtml (turn, opt, th) {
       (turn.user.ts ? '<span class="chsh-ts">' + fmtTs(turn.user.ts) + '</span>' : '') + '</div>' +
       '<div class="chsh-body">' + mdToXhtml(turn.user.text, { images: opt.images }) + '</div></div>'
   }
-  for (const a of turn.asst) {
+  // full === false → keep only the final assistant reply, drop tool chips
+  const assts = opt.full === false && turn.asst.length ? [turn.asst[turn.asst.length - 1]] : turn.asst
+  for (const a of assts) {
     s += '<div class="chsh-asst"><div class="chsh-who">🤖' +
       (a.ts ? '<span class="chsh-ts">' + fmtTs(a.ts) + '</span>' : '') + '</div>' +
       '<div class="chsh-body">' + mdToXhtml(a.text, { images: opt.images }) + '</div></div>'
   }
-  if (opt.tools && turn.tools.length) {
+  if (opt.tools && opt.full !== false && turn.tools.length) {
     s += '<div class="chsh-tools">' + turn.tools.map(t =>
       '<span class="chsh-tool">🔧 ' + esc(t.name) + '</span>').join('') + '</div>'
   }
@@ -227,7 +229,7 @@ function slugTitle (s) {
 const PAGE_MAX = 7600 // CSS px per PNG page (x2 DPR stays under Chrome's 16384 cap)
 
 function fragWithCss (turn, th, opt) {
-  return turnXhtml(turn, { images: false, tools: opt.tools }, th)
+  return turnXhtml(turn, { images: false, tools: opt.tools, full: opt.full }, th)
 }
 
 function buildPages (turns, th, opt) {

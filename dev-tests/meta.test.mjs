@@ -27,3 +27,13 @@ assert.equal(solidColor('#fafafa', 'rgb(0,0,0)'), 'rgb(250,250,250)')
 assert.equal(isDarkColor('rgb(21,21,24)'), true)
 assert.equal(isDarkColor('rgb(250,250,250)'), false)
 console.log('COLOR_TEST_OK')
+
+// --- full:false export keeps only question + final answer ---
+const { turnXhtml } = await import('./core.mjs')
+const thx = { bg: '#fff', fg: '#111', card: '#f8f8f8', border: '#ddd', accent: '#55f', muted: '#888', codeBg: '#eee' }
+const turn = { id: 0, user: { text: '问题一' }, asst: [{ text: '中间回复甲' }, { text: '最终答复乙' }], tools: [{ name: 'terminal', ctx: 'ls' }] }
+const fullX = turnXhtml(turn, { images: false, tools: true, full: true }, thx)
+const briefX = turnXhtml(turn, { images: false, tools: true, full: false }, thx)
+assert(fullX.includes('中间回复甲') && fullX.includes('🔧') && fullX.includes('最终答复乙'))
+assert(!briefX.includes('中间回复甲') && !briefX.includes('🔧') && briefX.includes('问题一') && briefX.includes('最终答复乙'))
+console.log('FULLFLAG_TEST_OK')

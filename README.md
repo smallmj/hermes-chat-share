@@ -12,6 +12,9 @@
 - **三种入口**：对话页标题栏分享图标（在哪个对话点哪个，直接进入该对话的分享界面）/ 侧边栏「分享对话」页 / `⌘K` 命令 / 快捷键 `Ctrl+Shift+H`
 - **自动跟随会话**：分享页实时响应你在侧边栏切换的对话，无需手动刷新
 - **导出带会话元数据**：模型与提供方、思考等级（thinking effort）、缓存命中率、输出速度 tok/s、总 tokens、Hermes 版本——页面、PNG、HTML、Markdown 四处一致
+- **长对话导航**：右侧分格滚动条一轮一刻度，点击直接跳到对应轮次；搜索框匹配问题与回复内容，`Enter`/↑↓ 在多个结果间跳转（命中的轮自动展开并高亮描边）
+- **按轮折叠**：每轮默认只显示你的问题和最终回复，「展开」查看中间过程与工具调用（展开按钮标注隐藏数量）
+- **分享范围开关**：「分享完整对话」勾选决定导出内容——不勾选时 PNG/HTML/Markdown 只含问题+最终回复，勾选才含完整过程
 - 按轮次多选：全选 / 清空 / 反选；保留 Markdown、代码块、表格、引用、工具调用圆片（**checkbox 开关**）、时间戳
 - 图片宽度 680 / 880 / 1080px 三档，字号三档，主题配色自动快照当前 App 主题
 - 长图超过 ~7600px 自动分页（文件名 `-01`、`-02`…，2× DPR 高清）
@@ -50,7 +53,11 @@
 Select conversation turns and export them as a **long PNG screenshot, self-contained HTML, or Markdown** — the Hermes Desktop counterpart of [dsh-share](https://github.com/hellodigua/dsh-share). Single-file plugin: no dependencies, no build, no network.
 
 ### Features
-- Sidebar page / command palette (`Share conversation`) / keybind `Ctrl+Shift+H`
+- **Three entry points**: the share icon on each conversation's title bar (opens that conversation's share page directly — no refresh), sidebar page, command palette (`Share conversation`), keybind `Ctrl+Shift+H`; the page follows the conversation you switch to
+- **Session metadata in every export**: model & provider, thinking effort, cache hit %, output tok/s, total tokens, Hermes version — consistent across the page, PNG, HTML and Markdown
+- **Long-conversation navigation**: a segmented gutter on the right (one tick per turn, click to jump); a search box matches questions and answers with Enter / ↑ ↓ cycling through hits (matched turns auto-expand and get an accent outline)
+- **Per-turn collapsing**: each turn shows only your question and the final answer; “expand” reveals intermediate replies and tool calls
+- **Share-scope toggle**: “share full conversation” controls the exports — unchecked, PNG/HTML/Markdown contain just question + final answer
 - Per-turn selection (all / none / invert); keeps markdown, code blocks, tables, quotes, tool-call chips, timestamps
 - Image width 680 / 880 / 1080 px, three font scales, colors snapshot your current app theme
 - Auto-paginates tall exports (`-01`, `-02`, …) at 2× DPR
