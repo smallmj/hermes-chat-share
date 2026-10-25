@@ -3,7 +3,7 @@
 import {
   host, haptic, useValue, atom,
   ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA, KEYBINDS_AREA, TITLEBAR_AREAS,
-  Button, Tip, EmptyState, GlyphSpinner, MessageTextContent, Codicon,
+  Button, EmptyState, GlyphSpinner, MessageTextContent, Codicon,
   usePluginI18n
 } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
@@ -347,7 +347,6 @@ const turnsAtom = atom([])
 const stateAtom = atom({ loading: false, error: '', title: '', sid: '', total: 0 })
 const metaAtom = atom(null)
 const selAtom = atom(null) // null = all selected; Set-arrays of turn ids otherwise
-const previewAtom = atom([]) // object URLs of the last rendered PNG pages
 const optAtom = atom({ width: 880, scale: 1, tools: true, ts: true })
 
 const t = (key, ...args) => ctxI18nRef && ctxI18nRef.t(key, ...args)
@@ -471,8 +470,7 @@ async function copyBlobToClipboard (blob) {
   // Selection copy. Chromium's selection archiver does NOT embed blob:/file:
   // image bytes into the pasteboard (targets get a broken-image placeholder);
   // a data: URL makes the HTML payload itself carry the base64 image so rich
-  // paste targets (WPS, Word, WeChat) can render it. For a guaranteed native
-  // bitmap, use the preview image + right-click → Copy image.
+  // paste targets (WPS, Word, WeChat) can render it.
   let src
   try { src = await blobToDataURL(blob) } catch { src = URL.createObjectURL(blob) }
   const box = document.createElement('div')
@@ -494,25 +492,6 @@ async function copyBlobToClipboard (blob) {
   if (ok) stages.push('exec:true')
   else stages.push('exec:false')
   return { via: ok ? 'selection' : null, stages }
-}
-
-function PreviewBlock () {
-  const t = usePluginI18n(PLUGIN_ID)
-  const urls = useValue(previewAtom)
-  if (!urls.length) return null
-  return jsxs('div', { className: 'px-4 py-3 border-b border-(--border)', children: [
-    jsx('div', { className: 'text-xs text-(--muted-foreground) mb-2', children: t('previewHint') }),
-    jsx('div', { className: 'flex flex-wrap gap-3', children: urls.map((u, k) =>
-      jsx('img', { src: u, className: 'max-w-full rounded-lg border border-(--border)', style: { maxWidth: '420px' } }, k)) })
-  ] })
-}
-
-async function doPreview () {
-  try {
-    const imgs = await renderImages()
-    for (const u of previewAtom.get()) URL.revokeObjectURL(u)
-    previewAtom.set(imgs.map(i => URL.createObjectURL(i.blob)))
-  } catch (err) { fail(err) }
 }
 
 async function doCopyPng () {
@@ -658,8 +637,7 @@ function Toolbar () {
     jsx(Button, { size: 'sm', onClick: () => void doDownloadMd(), children: 'Markdown' }),
     jsx(Button, { size: 'sm', onClick: () => void doDownloadHtml(), children: 'HTML' }),
     jsx(Button, { size: 'sm', onClick: () => void doDownloadPng(), children: t('btnPng') }),
-    jsx(Tip, { label: t('previewHint'), children: jsx(Button, { size: 'sm', variant: 'secondary', onClick: () => void doPreview(), children: t('preview') }) }),
-    jsx(Tip, { label: t('copyHint'), children: jsx(Button, { size: 'sm', variant: 'secondary', onClick: () => void doCopyPng(), children: t('btnCopyPng') }) }),
+    jsx(Button, { size: 'sm', onClick: () => void doCopyPng(), children: t('btnCopyPng') }),
     ml ? jsx('div', { className: 'w-full text-xs text-(--muted-foreground)', children: ml }, 'meta') : null
   ] })
 }
@@ -692,18 +670,15 @@ function SharePage () {
       jsx('div', { className: 'font-medium text-sm', children: st.title || t('shareTitle') }),
       st.sid ? jsx('span', { className: 'text-xs text-(--muted-foreground)', children: st.sid.slice(0, 8) + '…' }) : null,
       jsx('span', { className: 'flex-1' }),
-      st.loading
-        ? jsx(GlyphSpinner, { className: 'text-(--muted-foreground)' })
-        : jsx(Button, { size: 'xs', variant: 'text', onClick: () => void fetchTurns(), children: t('refresh') })
+      st.loading ? jsx(GlyphSpinner, { className: 'text-(--muted-foreground)' }) : null
     ] }),
     jsx(Toolbar, {}),
-    jsx(PreviewBlock, {}),
     st.error ? jsxs('div', { className: 'p-6 flex flex-col items-start gap-3', children: [
       jsx(EmptyState, { title: t('loadFail'), description: st.error === 'no-focused-session' ? t('needSession') : st.error }),
       jsx(Button, { size: 'sm', onClick: () => void fetchTurns(), children: t('retry') })
     ] }) : !turns.length && !st.loading ? jsxs('div', { className: 'p-6 flex flex-col items-start gap-3', children: [
       jsx(EmptyState, { title: t('empty') }),
-      jsx(Button, { size: 'sm', onClick: () => void fetchTurns(), children: t('refresh') })
+      jsx(Button, { size: 'sm', onClick: () => void fetchTurns(), children: t('retry') })
     ] }) : jsx('div', { className: 'flex-1 min-h-0 overflow-y-auto px-4', children: jsx('div', { className: 'mx-auto w-full max-w-[880px]', children:
       turns.map(turn => jsx(TurnRow, {
         turn, checked: sel == null ? true : sel.has(turn.id), onToggle: toggle
@@ -716,7 +691,7 @@ const STRINGS = {
   en: {
     navLabel: 'Share chat',
     shareTitle: 'Share conversation',
-    refresh: 'Refresh', retry: 'Retry',
+    retry: 'Retry',
     loadFail: 'Could not load this conversation',
     needSession: 'Open a chat conversation first, then come back to share it.',
     empty: 'No turns in this session yet',
@@ -727,10 +702,7 @@ const STRINGS = {
     fontN: px => 'font ' + px + 'px',
     toggleTools: 'tool calls',
     btnPng: 'Download PNG', btnCopyPng: 'Copy image',
-    copyHint: 'Copy the long screenshot to the clipboard (multi-page conversations download instead)',
     copied: 'Long image copied to clipboard',
-    preview: 'Preview',
-    previewHint: 'Preview the rendered image, then right-click it → “Copy image” for a true bitmap on the clipboard',
     copyBlocked: 'Clipboard copy refused by desktop policy',
     multiPage: n => 'Clipboard holds one image — conversation spans ' + n + ' pages, saved as ' + n + ' files instead',
     saved: 'Saved', exportFailed: 'Export failed',
@@ -739,7 +711,7 @@ const STRINGS = {
   'zh': {
     navLabel: '分享对话',
     shareTitle: '分享对话',
-    refresh: '刷新', retry: '重试',
+    retry: '重试',
     loadFail: '无法读取这个会话',
     needSession: '先打开一个对话，再来这里分享。',
     empty: '这个会话还没有内容',
@@ -750,10 +722,7 @@ const STRINGS = {
     fontN: px => '字号 ' + px + 'px',
     toggleTools: '工具调用',
     btnPng: '下载长图', btnCopyPng: '复制图片',
-    copyHint: '把长截图复制到剪贴板（多页时改为下载文件）',
     copied: '长截图已复制到剪贴板',
-    preview: '预览图片',
-    previewHint: '预览生成图后，在图上点右键选「复制图片」，真实位图就会进剪贴板（微信/WPS 直接可贴）',
     copyBlocked: '剪贴板复制被桌面端权限策略拒绝',
     multiPage: n => '剪贴板只能放一张图——本次内容跨 ' + n + ' 页，已改为保存 ' + n + ' 个文件',
     saved: '已保存', exportFailed: '导出失败',
