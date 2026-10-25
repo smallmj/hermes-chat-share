@@ -2,6 +2,8 @@
 
 [English](README.md) · **简体中文**
 
+![banner](docs/banner.png)
+
 把 Hermes 桌面端对话按轮次多选，导出为 **长截图 PNG / 自包含 HTML / Markdown**——对标 [dsh-share](https://github.com/hellodigua/dsh-share) 的体验，但长在 Hermes Desktop 里。单文件桌面插件：零依赖、零联网、无需构建。
 
 ![导出样张](sample.png)

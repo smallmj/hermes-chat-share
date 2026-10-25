@@ -2,6 +2,8 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
+![banner](docs/banner.png)
+
 Share Hermes Desktop conversations as **long PNG screenshots, self-contained HTML, or Markdown** — pick exactly the turns you want, like [dsh-share](https://github.com/hellodigua/dsh-share) does for chat web, but built into Hermes Desktop. Single-file desktop plugin: zero dependencies, zero network, no build step.
 
 ![Export sample](sample.png)
