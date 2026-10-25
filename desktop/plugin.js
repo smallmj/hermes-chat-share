@@ -2,8 +2,8 @@
 // (a Hermes Desktop counterpart to dsh-share). Single-file disk plugin.
 import {
   host, haptic, useValue, atom,
-  ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA, KEYBINDS_AREA,
-  Button, Tip, EmptyState, GlyphSpinner, MessageTextContent,
+  ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA, KEYBINDS_AREA, TITLEBAR_AREAS,
+  Button, Tip, EmptyState, GlyphSpinner, MessageTextContent, Codicon,
   usePluginI18n
 } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
@@ -342,13 +342,12 @@ function groupTurns (messages) {
   return turns.filter(x => x.user || x.asst.length)
 }
 
-async function fetchTurns () {
+async function fetchTurnsFor (sid) {
+  if (!sid) return
   const st = stateAtom.get()
-  if (st.loading) return
+  if (st.loading && st.sid === sid) return
   stateAtom.set({ ...st, loading: true, error: '' })
   try {
-    const sid = host.state.focusedStoredSessionId.get() || host.state.activeSessionId.get()
-    if (!sid) throw new Error('no-focused-session')
     let res = null, lastErr = null
     const tried = []
     for (const cand of [sid, host.state.activeSessionId.get(), host.state.focusedStoredSessionId.get()]) {
@@ -372,6 +371,12 @@ async function fetchTurns () {
     stateAtom.set({ ...stateAtom.get(), loading: false, error: String((err && err.message) || err) })
     turnsAtom.set([])
   }
+}
+
+function fetchTurns () {
+  const sid = host.state.focusedStoredSessionId.get() || host.state.activeSessionId.get()
+  if (!sid) { stateAtom.set({ loading: false, error: 'no-focused-session', title: '', sid: '', total: 0 }); return }
+  return fetchTurnsFor(sid)
 }
 
 // -- export pipeline -----------------------------------------------------------
@@ -576,10 +581,15 @@ function SharePage () {
   const st = useValue(stateAtom)
   const turns = useValue(turnsAtom)
   const sel = useValue(selAtom)
+  // Follow whatever conversation the user is looking at: switching sessions in
+  // the sidebar re-fetches automatically — no manual Refresh round-trip.
+  const focus = useValue(host.state.focusedStoredSessionId)
+  const active = useValue(host.state.activeSessionId)
+  const sid = focus || active || ''
 
   useEffect(() => {
-    if (!stateAtom.get().sid && !stateAtom.get().loading) void fetchTurns()
-  }, [])
+    if (sid) void fetchTurnsFor(sid)
+  }, [sid])
 
   const toggle = id => {
     const cur = selAtom.get()
@@ -668,6 +678,17 @@ export default {
     const contribute = () => ctx.registerMany([
       { id: 'page', area: ROUTES_AREA, data: { path: ROUTE }, render: () => jsx(SharePage, {}) },
       { id: 'nav', area: SIDEBAR_NAV_AREA, data: { path: ROUTE, label: ctx.i18n.t('navLabel'), codicon: 'share' } },
+      {
+        id: 'titlebar', area: TITLEBAR_AREAS.right,
+        data: {
+          id: 'chat-share.open', label: ctx.i18n.t('navLabel'),
+          icon: jsx(Codicon, { name: 'share' }),
+          // Titlebar mounts stay alive across routes — read the focused
+          // conversation at click time, so whatever chat you're on is what
+          // gets shared. SharePage then follows that session on its own.
+          onSelect: () => { host.navigate(ROUTE); void fetchTurns() }
+        }
+      },
       {
         id: 'open', area: PALETTE_AREA,
         data: { id: 'chat-share.open', label: ctx.i18n.t('shareTitle'), keywords: ['share', 'export', 'png', 'screenshot', '分享', '截图', '长图'], run: () => host.navigate(ROUTE) }
