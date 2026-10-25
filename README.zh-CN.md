@@ -1,0 +1,76 @@
+# Hermes Chat Share（对话分享）
+
+[English](README.md) · **简体中文**
+
+把 Hermes 桌面端对话按轮次多选，导出为 **长截图 PNG / 自包含 HTML / Markdown**——对标 [dsh-share](https://github.com/hellodigua/dsh-share) 的体验，但长在 Hermes Desktop 里。单文件桌面插件：零依赖、零联网、无需构建。
+
+![导出样张](sample.png)
+
+## 安装（一键）
+
+Hermes Desktop → **Capabilities → Plugins → Install from Git** → 填：
+
+```
+smallmj/hermes-chat-share
+```
+
+勾选 **Desktop UI** 组件，完成——每个对话的标题栏会多出分享图标。或直接点[一键安装链接](hermes://plugin/install?repo=smallmj/hermes-chat-share)。
+
+<details>
+<summary>手动安装</summary>
+
+把本仓库 `desktop/plugin.js` 放进**运行桌面 App 的那台机器**的插件目录（文件夹名必须是 `hermes-chat-share`）：
+
+- macOS / Linux：`~/.hermes/desktop-plugins/hermes-chat-share/plugin.js`
+- Windows：`%LOCALAPPDATA%\hermes\desktop-plugins\hermes-chat-share\plugin.js`
+
+页面没出现就 `⌘K / Ctrl+K` → `Reload desktop plugins`；开关在 Capabilities → Plugins。
+</details>
+
+## 功能
+
+**四个入口**——每个对话标题栏的分享图标（点谁的图标就是谁的分享页）、侧边栏页面、命令面板（`分享对话`）、快捷键 `Ctrl/Cmd+Shift+H`。页面自动跟随你切换的对话，没有刷新按钮，不会残留旧会话。
+
+**为长对话而生**
+- **轮次刻度条**：右侧分格导航，一轮一刻度，悬停预览问题内容，点击直达该轮。
+- **搜索**：匹配问题与回复全文，`Enter` / `Shift+Enter` / ↑↓ 在结果间循环跳转（`3/17` 计数），命中的轮自动展开并高亮描边。
+- **逐轮折叠**：每轮默认只显示你的问题和最终回复，「展开（N 条中间回复 · M 个工具调用）」按需展开，各轮独立。
+- **分享范围开关**：取消勾选「分享完整对话」后，**三种导出**都只含问题+最终回复——所见即所得。
+
+**诚实的会话元数据**——模型与提供方、思考等级、缓存命中率、输出速度 tok/s、总 tokens、Hermes 版本，进入页面头部和每种导出；取自网关的规范 `session.info`，缺字段就省略，绝不编造。
+
+**导出**
+- **PNG 长图**：宽 680/880/1080px、字号三档、2× 高清，配色实时快照当前 App 主题（深浅色都对）。超长自动分页；多页下载会**自动拼回一张长 PNG**，浏览器"一页只许下载一次"的限制吃不掉后面的页。
+- **复制图片**始终诚实：写入剪贴板的是内联 base64 富文本，WPS / Word / Google Docs 直接粘贴。复制确实做不到时（内容跨页、或桌面安全策略拦截插件写剪贴板），弹窗说明具体原因，由**你**选「下载图片」还是「取消」——绝不擅自替你下载。
+- **自包含 HTML** 与 **Markdown**，各为单个文件。
+- 保留真实渲染：代码块、表格、引用、行内代码、工具调用圆片（checkbox 开关）、时间戳。外链图片、`MEDIA:` 附件、`::preview` 组件在 PNG 里替换为占位标签（画布污染规则），HTML/Markdown 保留原链接。
+
+**界面语言跟随 App**（英/中自动切换），弹窗深浅色主题都正确且不透明。
+
+## 原理
+
+一个 `plugin.js`，只用官方 [桌面插件 SDK](https://hermes-agent.nousresearch.com/docs/developer-guide/desktop-plugin-sdk) 的公开能力：路由、侧栏、标题栏、命令面板、快捷键、i18n。不改 Hermes 任何内部实现、无 `eval`、无联网、无第三方主机。页面渲染复用 App 自带 Markdown 组件；PNG 走自包含 XHTML（SVG `foreignObject` → canvas）管线。
+
+## 隐私
+
+一切发生在你本地的桌面 App 内。对话内容不经过任何外部服务——剪贴板和下载是仅有的出口，且都要显式点击。无遥测，永远没有。
+
+## 开发
+
+```bash
+node --check desktop/plugin.js   # 语法
+./dev-tests/stub-runner.sh       # SDK 注册冒烟测试 → STUB_OK
+node dev-tests/meta.test.mjs     # 元数据/颜色合成/导出范围单测
+```
+
+Git 安装要求仓库根下 `desktop/plugin.js` 布局——见插件 SDK 文档。
+
+## 已知边界
+
+- 归档已久的会话可能缺实时元数据字段，meta 行自动省略，不显示假数据。
+- PNG 无法内嵌外链位图（浏览器画布规则），HTML/Markdown 保留链接。
+- 合并长图受画布上限约束（边长约 65,535px / 总面积约 2.68 亿像素，约 5–8 页）；超出则逐页下载并明确提示。
+
+## 许可
+
+[MIT](LICENSE) · 开发者工具，与 Nous Research 无隶属关系

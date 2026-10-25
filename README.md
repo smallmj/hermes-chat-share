@@ -1,75 +1,76 @@
-# chat-share — Hermes Desktop 对话分享插件 / conversation sharing plugin
+# Hermes Chat Share
 
-[中文](#中文) · [English](#english)
+**English** · [简体中文](README.zh-CN.md)
 
-![sample](sample.png)
+Share Hermes Desktop conversations as **long PNG screenshots, self-contained HTML, or Markdown** — pick exactly the turns you want, like [dsh-share](https://github.com/hellodigua/dsh-share) does for chat web, but built into Hermes Desktop. Single-file desktop plugin: zero dependencies, zero network, no build step.
 
-## 中文
+![Export sample](sample.png)
 
-把 Hermes 对话按轮次多选后导出为 **长截图 PNG / 自包含 HTML / Markdown**，功能对标 DeepSeek Harness 的 [dsh-share](https://github.com/hellodigua/dsh-share)。单文件桌面插件，零依赖、零联网、无需构建。
+## Install (one click)
 
-### 功能
-- **三种入口**：对话页标题栏分享图标（在哪个对话点哪个，直接进入该对话的分享界面）/ 侧边栏「分享对话」页 / `⌘K` 命令 / 快捷键 `Ctrl+Shift+H`
-- **自动跟随会话**：分享页实时响应你在侧边栏切换的对话，无需手动刷新
-- **导出带会话元数据**：模型与提供方、思考等级（thinking effort）、缓存命中率、输出速度 tok/s、总 tokens、Hermes 版本——页面、PNG、HTML、Markdown 四处一致
-- **长对话导航**：右侧分格滚动条一轮一刻度，点击直接跳到对应轮次；搜索框匹配问题与回复内容，`Enter`/↑↓ 在多个结果间跳转（命中的轮自动展开并高亮描边）
-- **按轮折叠**：每轮默认只显示你的问题和最终回复，「展开」查看中间过程与工具调用（展开按钮标注隐藏数量）
-- **分享范围开关**：「分享完整对话」勾选决定导出内容——不勾选时 PNG/HTML/Markdown 只含问题+最终回复，勾选才含完整过程
-- 按轮次多选：全选 / 清空 / 反选；保留 Markdown、代码块、表格、引用、工具调用圆片（**checkbox 开关**）、时间戳
-- 图片宽度 680 / 880 / 1080px 三档，字号三档，主题配色自动快照当前 App 主题
-- 长图超过 ~7600px 自动分页（文件名 `-01`、`-02`…，2× DPR 高清）
-- 「复制图片」进剪贴板（走内联 base64 的富文本通道，WPS/Word 等富文本目标可直接粘贴；无法复制时——内容跨页或桌面端权限拦截——会弹窗说明原因，由你选择「下载图片」或「取消」，不会擅自替你下载）；「下载长图 / HTML / Markdown」走系统下载
-- 长图中外链图片、附件（`MEDIA:`）、内嵌组件（`::preview`）替换为占位标签；HTML 导出保留图片链接
-- 界面中英文随 App 语言切换
+Hermes Desktop → **Capabilities → Plugins → Install from Git** → paste:
 
-### 安装（两种方式任选）
-**方式一 · Git 一键安装（推荐）**
-1. Hermes Desktop → `Capabilities → Plugins → Install from Git`
-2. 填 `smallmj/hermes-chat-share`（或完整 URL），组件勾选 **Desktop UI**
-   （或直接点 [一键安装链接](hermes://plugin/install?repo=smallmj/hermes-chat-share)）
+```
+smallmj/hermes-chat-share
+```
 
-**方式二 · 手动放置**
-把本仓库 `desktop/` 目录里的 `plugin.js` 放进桌面 App **所在机器**的插件目录（App 自动加载、改动热重载），文件夹名需与插件 id 一致（`hermes-chat-share`）：
-- macOS / Linux：`~/.hermes/desktop-plugins/hermes-chat-share/plugin.js`
-- Windows：`%LOCALAPPDATA%\hermes\desktop-plugins\hermes-chat-share\plugin.js`
+tick the **Desktop UI** component, done — a share icon now sits on every conversation's title bar. Or open the [install deep link](hermes://plugin/install?repo=smallmj/hermes-chat-share).
 
-没有出现就 `⌘K` → `Reload desktop plugins`；开关在 Capabilities → Plugins。
+<details>
+<summary>Manual install</summary>
 
-### 已知边界
-- 归档已久的会话可能缺少实时元数据（模型/速度等），此时 meta 行自动省略可得字段，不会显示假数据
-- 长图不含外链图片（防画布污染），HTML / Markdown 保留原始链接
-- 导出用内置轻量 Markdown 子集（标题/加粗/斜体/删除线/列表/表格/引用/代码围栏/链接/图片），复杂语法按普通文本处理
+Drop `desktop/plugin.js` from this repo into the plugins folder **on the machine running the Desktop app** (folder name must be `hermes-chat-share`):
 
-### 隐私
-渲染与导出全部发生在桌面 App 本地（Electron），对话内容不经过任何外部服务。
+- macOS / Linux: `~/.hermes/desktop-plugins/hermes-chat-share/plugin.js`
+- Windows: `%LOCALAPPDATA%\hermes\desktop-plugins\hermes-chat-share\plugin.js`
 
-### License
-[MIT](LICENSE) · 开发者工具，与 Nous Research 无隶属关系
+If the page doesn't show up: `⌘K / Ctrl+K` → `Reload desktop plugins`. On/off toggle under Capabilities → Plugins.
+</details>
 
----
+## Features
 
-## English
+**Four entry points** — the share icon on each conversation's title bar (opens that conversation directly), the sidebar page, the command palette (`Share conversation`), and `Ctrl/Cmd+Shift+H`. The page follows the conversation you switch to; no refresh button, no stale state.
 
-Select conversation turns and export them as a **long PNG screenshot, self-contained HTML, or Markdown** — the Hermes Desktop counterpart of [dsh-share](https://github.com/hellodigua/dsh-share). Single-file plugin: no dependencies, no build, no network.
+**Built for long conversations**
+- **Turn gutter**: segmented rail on the right — one tick per turn, hover to preview the question, click to jump straight there.
+- **Search**: matches questions and answers; `Enter` / `Shift+Enter` / ↑ ↓ cycle through hits with a `3/17` counter; each hit auto-expands and gets an accent outline.
+- **Per-turn collapsing**: every turn shows just your question and the final answer; *expand (N more replies · M tool calls)* reveals the rest, per turn.
+- **Share-scope checkbox**: uncheck “share full conversation” and **all three exports** contain only question + final answer — exactly what the collapsed view shows.
 
-### Features
-- **Three entry points**: the share icon on each conversation's title bar (opens that conversation's share page directly — no refresh), sidebar page, command palette (`Share conversation`), keybind `Ctrl+Shift+H`; the page follows the conversation you switch to
-- **Session metadata in every export**: model & provider, thinking effort, cache hit %, output tok/s, total tokens, Hermes version — consistent across the page, PNG, HTML and Markdown
-- **Long-conversation navigation**: a segmented gutter on the right (one tick per turn, click to jump); a search box matches questions and answers with Enter / ↑ ↓ cycling through hits (matched turns auto-expand and get an accent outline)
-- **Per-turn collapsing**: each turn shows only your question and the final answer; “expand” reveals intermediate replies and tool calls
-- **Share-scope toggle**: “share full conversation” controls the exports — unchecked, PNG/HTML/Markdown contain just question + final answer
-- Per-turn selection (all / none / invert); keeps markdown, code blocks, tables, quotes, tool-call chips, timestamps
-- Image width 680 / 880 / 1080 px, three font scales, colors snapshot your current app theme
-- Auto-paginates tall exports (`-01`, `-02`, …) at 2× DPR
-- Copy image to clipboard (rich-text channel with inline base64); when copying is impossible — multi-page export or the desktop clipboard policy — a dialog explains why and offers Download vs Cancel, never silently downloading
-- External images, `MEDIA:` attachments and `::preview` widgets become placeholders in PNG (HTML/MD keep them)
-- UI follows the app language (en / 简体中文)
+**Honest session metadata** — model & provider, thinking effort, cache hit rate, output speed (tok/s), token totals and Hermes version appear in the page header and in every export, read from the gateway's canonical `session.info`. Fields that aren't available are omitted, never invented.
 
-### Install
-**Git (recommended):** Capabilities → Plugins → Install from Git → `smallmj/hermes-chat-share`, pick the **Desktop UI** component.
-**Manual:** copy `desktop/plugin.js` into `~/.hermes/desktop-plugins/hermes-chat-share/` (Windows: `%LOCALAPPDATA%\hermes\desktop-plugins\hermes-chat-share\`) **on the machine running the desktop app**, then ⌘K → *Reload desktop plugins*.
+**Exports**
+- **PNG long image** at 680/880/1080 px wide, three font scales, 2× DPR, colors snapshotted from your live app theme (light *and* dark). Tall exports auto-paginate; multi-page downloads are **stitched back into one long PNG**, so the browser's one-download-per-page limit never eats pages.
+- **Copy image** stays honest: it goes to the clipboard as rich text with inline base64 (pastes straight into WPS / Word / Google Docs). When a copy genuinely cannot happen — the image spans pages, or desktop security policy blocks plugin clipboard writes — a dialog explains the exact reason and lets **you** choose *Download image* or *Cancel*. It never downloads behind your back.
+- **Self-contained HTML** and **Markdown**, each a single file.
+- Keeps real rendering: code blocks, tables, quotes, inline code, tool-call chips (checkbox-controlled), timestamps. External images, `MEDIA:` attachments and `::preview` widgets become labeled placeholders in PNGs (canvas-taint rules) and keep their links in HTML/Markdown.
 
-### Notes
-- Shares the currently focused session (hit Refresh after switching).
-- PNG export excludes external images to keep the canvas untainted; HTML/MD exports keep them.
-- MIT licensed; not affiliated with Nous Research.
+**The UI follows the app language** (English / 简体中文 automatically), and dialogs are opaque and theme-correct in both modes.
+
+## How it works
+
+One `plugin.js` on top of the public [Desktop Plugin SDK](https://hermes-agent.nousresearch.com/docs/developer-guide/desktop-plugin-sdk) surfaces only: route, sidebar nav, titlebar action, palette commands, keybinds, i18n. No monkey-patching, no `eval`, no network, no third-party hosts. On-page rendering reuses the app's own markdown components; PNG export runs a self-contained XHTML pipeline (SVG `foreignObject` → canvas).
+
+## Privacy
+
+Everything runs locally inside your Desktop app. Conversation content never leaves your machine — clipboard and downloads are the only exits, and both need an explicit click. No telemetry, ever.
+
+## Development
+
+```bash
+node --check desktop/plugin.js   # syntax
+./dev-tests/stub-runner.sh       # SDK registration smoke test → STUB_OK
+node dev-tests/meta.test.mjs     # metadata / color-scoping / export-scope unit tests
+```
+
+Git installs require the `desktop/plugin.js` layout at repo root — see the [plugin SDK docs](https://hermes-agent.nousresearch.com/docs/developer-guide/desktop-plugin-sdk).
+
+## Known edges
+
+- Very old archived sessions may lack live metadata — the meta line silently omits unavailable fields.
+- PNGs cannot embed cross-origin raster images (browser canvas rules); HTML/Markdown keep them as links.
+- One merged PNG is capped by browser canvas limits (≈65,535 px side / 268 M px total, roughly 5–8 pages); beyond that, pages download one by one with a clear notice.
+
+## License
+
+[MIT](LICENSE) — use it, fork it, ship it. Not affiliated with Nous Research.
