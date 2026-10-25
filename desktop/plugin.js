@@ -1,4 +1,4 @@
-// chat-share — share Hermes conversations as long PNG images / HTML / Markdown
+// hermes-chat-share — share Hermes conversations as long PNG images / HTML / Markdown
 // (a Hermes Desktop counterpart to dsh-share). Single-file disk plugin.
 import {
   host, haptic, useValue, atom,
@@ -9,7 +9,7 @@ import {
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect } from 'react'
 
-const PLUGIN_ID = 'chat-share'
+const PLUGIN_ID = 'hermes-chat-share'
 const ROUTE = '/chat-share'
 
 // ==== CORE START ==== (dependency-free export core; mirrored by the test harness)

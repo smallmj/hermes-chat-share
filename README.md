@@ -20,13 +20,13 @@
 ### 安装（两种方式任选）
 **方式一 · Git 一键安装（推荐）**
 1. Hermes Desktop → `Capabilities → Plugins → Install from Git`
-2. 填 `https://github.com/smallmj/hermes-chat-share`，组件勾选 **Desktop**
+2. 填 `smallmj/hermes-chat-share`（或完整 URL），组件勾选 **Desktop UI**
    （或直接点 [一键安装链接](hermes://plugin/install?repo=smallmj/hermes-chat-share)）
 
 **方式二 · 手动放置**
-把 `chat-share/` 文件夹放进桌面 App **所在机器**的插件目录（App 自动加载、改动热重载）：
-- macOS / Linux：`~/.hermes/desktop-plugins/chat-share/plugin.js`
-- Windows：`%LOCALAPPDATA%\hermes\desktop-plugins\chat-share\plugin.js`
+把本仓库 `desktop/` 目录里的 `plugin.js` 放进桌面 App **所在机器**的插件目录（App 自动加载、改动热重载），文件夹名需与插件 id 一致（`hermes-chat-share`）：
+- macOS / Linux：`~/.hermes/desktop-plugins/hermes-chat-share/plugin.js`
+- Windows：`%LOCALAPPDATA%\hermes\desktop-plugins\hermes-chat-share\plugin.js`
 
 没有出现就 `⌘K` → `Reload desktop plugins`；开关在 Capabilities → Plugins。
 
@@ -57,8 +57,8 @@ Select conversation turns and export them as a **long PNG screenshot, self-conta
 - UI follows the app language (en / 简体中文)
 
 ### Install
-**Git (recommended):** Capabilities → Plugins → Install from Git → `https://github.com/smallmj/hermes-chat-share`, pick the **Desktop** component.
-**Manual:** copy the `chat-share/` folder into `~/.hermes/desktop-plugins/` (Windows: `%LOCALAPPDATA%\hermes\desktop-plugins\`) **on the machine running the desktop app**, then ⌘K → *Reload desktop plugins*.
+**Git (recommended):** Capabilities → Plugins → Install from Git → `smallmj/hermes-chat-share`, pick the **Desktop UI** component.
+**Manual:** copy `desktop/plugin.js` into `~/.hermes/desktop-plugins/hermes-chat-share/` (Windows: `%LOCALAPPDATA%\hermes\desktop-plugins\hermes-chat-share\`) **on the machine running the desktop app**, then ⌘K → *Reload desktop plugins*.
 
 ### Notes
 - Shares the currently focused session (hit Refresh after switching).
