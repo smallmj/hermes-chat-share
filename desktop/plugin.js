@@ -347,6 +347,7 @@ const turnsAtom = atom([])
 const stateAtom = atom({ loading: false, error: '', title: '', sid: '', total: 0 })
 const metaAtom = atom(null)
 const selAtom = atom(null) // null = all selected; Set-arrays of turn ids otherwise
+const previewAtom = atom([]) // object URLs of the last rendered PNG pages
 const optAtom = atom({ width: 880, scale: 1, tools: true, ts: true })
 
 const t = (key, ...args) => ctxI18nRef && ctxI18nRef.t(key, ...args)
@@ -450,23 +451,35 @@ function download (blob, name) {
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove() }, 4000)
 }
 
-// Fallback path: Hermes Electron denies clipboard-sanitized-write to every
-// non-Skills-Hub origin (electron/main.ts installMediaPermissions), so
-// navigator.clipboard.write throws NotAllowedError in plugin renderers on all
-// platforms. execCommand('copy') on a selected real <img> writes bitmap
-// flavors to the pasteboard and is not gated by that permission handler.
+// Fallback paths for copy-image. Hermes Electron denies the async clipboard
+// write (clipboard-sanitized-write is granted only to Skills Hub origins,
+// electron/main.ts installMediaPermissions), so navigator.clipboard.write
+// always throws NotAllowedError here. The selection-copy path below is a
+// best-effort: the pasteboard gets text/html carrying the image as base64
+// (renders in rich targets) but no native bitmap flavor — right-click
+// "Copy image" on the preview is the guaranteed bitmap route.
+function blobToDataURL (blob) {
+  return new Promise((res, rej) => { const f = new FileReader(); f.onload = () => res(f.result); f.onerror = () => rej(new Error('blob-read-failed')); f.readAsDataURL(blob) })
+}
+
 async function copyBlobToClipboard (blob) {
   const stages = []
   try {
     await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
     return { via: 'api', stages }
   } catch { stages.push('api:denied-by-policy') }
-  const url = URL.createObjectURL(blob)
+  // Selection copy. Chromium's selection archiver does NOT embed blob:/file:
+  // image bytes into the pasteboard (targets get a broken-image placeholder);
+  // a data: URL makes the HTML payload itself carry the base64 image so rich
+  // paste targets (WPS, Word, WeChat) can render it. For a guaranteed native
+  // bitmap, use the preview image + right-click → Copy image.
+  let src
+  try { src = await blobToDataURL(blob) } catch { src = URL.createObjectURL(blob) }
   const box = document.createElement('div')
   box.contentEditable = 'true'
   box.style.cssText = 'position:fixed;left:-99999px;top:0;user-select:text;-webkit-user-select:text'
   const img = document.createElement('img')
-  img.src = url
+  img.src = src
   await new Promise(r => { img.onload = r; img.onerror = r })
   box.appendChild(img)
   document.body.appendChild(box)
@@ -476,10 +489,30 @@ async function copyBlobToClipboard (blob) {
   sel.removeAllRanges(); sel.addRange(range)
   let ok = false
   try { ok = document.execCommand('copy') } catch (e) { stages.push('exec:throw(' + e.message + ')') }
-  sel.removeAllRanges(); box.remove(); URL.revokeObjectURL(url)
+  sel.removeAllRanges(); box.remove()
+  if (src.startsWith('blob:') || src.startsWith('http')) URL.revokeObjectURL(src)
   if (ok) stages.push('exec:true')
   else stages.push('exec:false')
   return { via: ok ? 'selection' : null, stages }
+}
+
+function PreviewBlock () {
+  const t = usePluginI18n(PLUGIN_ID)
+  const urls = useValue(previewAtom)
+  if (!urls.length) return null
+  return jsxs('div', { className: 'px-4 py-3 border-b border-(--border)', children: [
+    jsx('div', { className: 'text-xs text-(--muted-foreground) mb-2', children: t('previewHint') }),
+    jsx('div', { className: 'flex flex-wrap gap-3', children: urls.map((u, k) =>
+      jsx('img', { src: u, className: 'max-w-full rounded-lg border border-(--border)', style: { maxWidth: '420px' } }, k)) })
+  ] })
+}
+
+async function doPreview () {
+  try {
+    const imgs = await renderImages()
+    for (const u of previewAtom.get()) URL.revokeObjectURL(u)
+    previewAtom.set(imgs.map(i => URL.createObjectURL(i.blob)))
+  } catch (err) { fail(err) }
 }
 
 async function doCopyPng () {
@@ -625,6 +658,7 @@ function Toolbar () {
     jsx(Button, { size: 'sm', onClick: () => void doDownloadMd(), children: 'Markdown' }),
     jsx(Button, { size: 'sm', onClick: () => void doDownloadHtml(), children: 'HTML' }),
     jsx(Button, { size: 'sm', onClick: () => void doDownloadPng(), children: t('btnPng') }),
+    jsx(Tip, { label: t('previewHint'), children: jsx(Button, { size: 'sm', variant: 'secondary', onClick: () => void doPreview(), children: t('preview') }) }),
     jsx(Tip, { label: t('copyHint'), children: jsx(Button, { size: 'sm', variant: 'secondary', onClick: () => void doCopyPng(), children: t('btnCopyPng') }) }),
     ml ? jsx('div', { className: 'w-full text-xs text-(--muted-foreground)', children: ml }, 'meta') : null
   ] })
@@ -663,6 +697,7 @@ function SharePage () {
         : jsx(Button, { size: 'xs', variant: 'text', onClick: () => void fetchTurns(), children: t('refresh') })
     ] }),
     jsx(Toolbar, {}),
+    jsx(PreviewBlock, {}),
     st.error ? jsxs('div', { className: 'p-6 flex flex-col items-start gap-3', children: [
       jsx(EmptyState, { title: t('loadFail'), description: st.error === 'no-focused-session' ? t('needSession') : st.error }),
       jsx(Button, { size: 'sm', onClick: () => void fetchTurns(), children: t('retry') })
@@ -694,6 +729,8 @@ const STRINGS = {
     btnPng: 'Download PNG', btnCopyPng: 'Copy image',
     copyHint: 'Copy the long screenshot to the clipboard (multi-page conversations download instead)',
     copied: 'Long image copied to clipboard',
+    preview: 'Preview',
+    previewHint: 'Preview the rendered image, then right-click it → “Copy image” for a true bitmap on the clipboard',
     copyBlocked: 'Clipboard copy refused by desktop policy',
     multiPage: n => 'Clipboard holds one image — conversation spans ' + n + ' pages, saved as ' + n + ' files instead',
     saved: 'Saved', exportFailed: 'Export failed',
@@ -715,6 +752,8 @@ const STRINGS = {
     btnPng: '下载长图', btnCopyPng: '复制图片',
     copyHint: '把长截图复制到剪贴板（多页时改为下载文件）',
     copied: '长截图已复制到剪贴板',
+    preview: '预览图片',
+    previewHint: '预览生成图后，在图上点右键选「复制图片」，真实位图就会进剪贴板（微信/WPS 直接可贴）',
     copyBlocked: '剪贴板复制被桌面端权限策略拒绝',
     multiPage: n => '剪贴板只能放一张图——本次内容跨 ' + n + ' 页，已改为保存 ' + n + ' 个文件',
     saved: '已保存', exportFailed: '导出失败',
