@@ -32,7 +32,9 @@ function mdToXhtml (src, opts) {
       i++
       while (i < L.length && !closeRe.test(L[i])) { buf.push(L[i]); i++ }
       i++
-      out.push('<pre><code' + (fence[2] ? ' class="lang-' + esc(fence[2]) + '"' : '') + '>' + esc(buf.join('\n')) + '</code></pre>')
+      const lang = fence[2] || ''
+      out.push('<pre><code' + (lang ? ' class="lang-' + esc(lang) + '"' : '') + '>' +
+        highlightCode(buf.join('\n'), lang) + '</code></pre>')
       continue
     }
 
@@ -212,7 +214,20 @@ function exportCss (th, opt) {
     '.chsh-ph{color:' + th.muted + ';border:1px dashed ' + th.border + ';border-radius:6px;padding:0 6px;font-size:0.85em;}',
     '.chsh-img{max-width:100%;height:auto;border-radius:8px;margin:6px 0;display:block;}',
     '.chsh-foot{margin-top:26px;padding-top:12px;border-top:1px solid ' + th.border + ';font-size:' + (fs * 0.72) + 'px;color:' + th.muted + ';}'
-  ].join('')
+  ]
+  // Syntax-highlight token colors (only present on fixed palettes; auto theme
+  // exports keep plain code, matching the pre-highlight look).
+  if (th.tok) {
+    css.push(
+      '.chsh-body .tok-kw{color:' + th.tok.kw + ';}',
+      '.chsh-body .tok-str{color:' + th.tok.str + ';}',
+      '.chsh-body .tok-com{color:' + th.tok.com + ';font-style:italic;}',
+      '.chsh-body .tok-num{color:' + th.tok.num + ';}',
+      '.chsh-body .tok-fn{color:' + th.tok.fn + ';}'
+    )
+  }
+  css.push('') // trailing newline-free join, keeps existing .join('') shape
+  return css.join('')
 }
 
 // One turn → XHTML fragment (used by measurement, PNG and HTML export).
@@ -235,6 +250,213 @@ function turnXhtml (turn, opt, th) {
       '<span class="chsh-tool">🔧 ' + esc(t.name) + '</span>').join('') + '</div>'
   }
   return s + '</div>'
+}
+
+// One turn → JSON-safe object. Honors the same share-scope rules as the other
+// exports: full === false keeps only the final assistant reply, tools=false
+// drops tool calls. Pure so it can be unit-tested from the extracted CORE.
+function turnJson (turn, opt) {
+  const assts = opt.full === false ? turn.asst.slice(-1) : turn.asst
+  return {
+    id: turn.id,
+    user: turn.user ? { text: turn.user.text, ts: turn.user.ts || null } : null,
+    assistant: assts.map(a => ({ text: a.text, ts: a.ts || null })),
+    tools: (opt.tools && opt.full !== false)
+      ? turn.tools.map(x => ({ name: x.name, context: x.ctx || '' }))
+      : []
+  }
+}
+
+function exportJson (turns, meta, title, opt) {
+  const payload = {
+    title: title || '',
+    exportedAt: new Date().toISOString(),
+    meta: opt.meta === false ? null : (buildMetaLine(meta) || null),
+    shareFull: opt.full !== false,
+    includeTools: !!(opt.tools && opt.full !== false),
+    turns: turns.map(x => turnJson(x, opt))
+  }
+  return JSON.stringify(payload, null, 2)
+}
+
+// -- syntax highlighting (dependency-free, conservative) ----------------------
+// Tokenizes a small set of common languages into four token classes. Emits
+// XHTML spans (.tok-kw/.tok-str/.tok-com/.tok-num) with all content escaped.
+// Unknown / missing languages fall back to plain esc() — never worse than the
+// pre-highlight behavior. Oversized blocks skip highlighting so the SVG
+// foreignObject rasterizer (15s timeout) can't be pushed over the edge.
+const HL_MAX_LEN = 10240
+
+const HL_LANGS = {
+  js: {
+    lineComment: ['//'], blockComment: [['/*', '*/']],
+    kw: /\b(?:const|let|var|function|return|if|else|for|while|do|switch|case|break|continue|new|class|extends|super|this|typeof|instanceof|in|of|try|catch|finally|throw|async|await|yield|import|from|export|default|delete|void|null|undefined|true|false|static|get|set|interface|type|enum|implements|readonly|public|private|protected|namespace|declare|as|satisfies|keyof)\b/g,
+    num: /\b(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?)\b/g
+  },
+  py: {
+    lineComment: ['#'],
+    kw: /\b(?:def|return|if|elif|else|for|while|break|continue|class|import|from|as|with|try|except|finally|raise|lambda|pass|global|nonlocal|assert|yield|del|in|is|not|and|or|None|True|False|async|await|self|match|case)\b/g,
+    num: /\b(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|0[oO][0-7_]+|\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?)\b/g
+  },
+  sh: {
+    lineComment: ['#'],
+    kw: /\b(?:if|then|else|elif|fi|for|while|do|done|case|esac|function|return|local|export|source|set|unset|shift|exit|echo|cd|read)\b/g,
+    num: /\b\d+\b/g
+  },
+  css: {
+    lineComment: [], blockComment: [['/*', '*/']],
+    kw: /(?:^|[\s{;])(@[\w-]+)(?=\s|{|:)/g,
+    num: /-?\b\d+(?:\.\d+)?(?:px|em|rem|%|vh|vw|s|ms|deg|fr)?\b/g
+  }
+}
+// alias map → canonical language key
+const HL_ALIAS = {
+  javascript: 'js', jsx: 'js', mjs: 'js', cjs: 'js', node: 'js',
+  ts: 'js', typescript: 'js', tsx: 'js',
+  python: 'py', py3: 'py', python3: 'py',
+  bash: 'sh', shell: 'sh', zsh: 'sh', console: 'sh',
+  json: null, // JSON handled separately
+  html: null, xml: null, // markup handled separately
+  stylesheet: 'css'
+}
+
+function hlEscape (s) { return esc(s) }
+
+// Split source into [comment, string, rest] segments preserving order; the
+// caller highlights keywords/numbers only inside `rest`.
+function hlSegment (code, langKey) {
+  const spec = HL_LANGS[langKey]
+  const segs = []
+  let i = 0
+  const n = code.length
+  let buf = ''
+  const flush = () => { if (buf) { segs.push({ kind: 'rest', text: buf }); buf = '' } }
+  while (i < n) {
+    let matched = false
+    // block comments
+    for (const [open, close] of (spec.blockComment || [])) {
+      if (code.startsWith(open, i)) {
+        flush()
+        const end = code.indexOf(close, i + open.length)
+        const stop = end === -1 ? n : end + close.length
+        segs.push({ kind: 'com', text: code.slice(i, stop) })
+        i = stop; matched = true; break
+      }
+    }
+    if (matched) continue
+    // line comments
+    let lc = null
+    for (const tok of (spec.lineComment || [])) if (code.startsWith(tok, i)) { lc = tok; break }
+    if (lc) {
+      flush()
+      let end = code.indexOf('\n', i)
+      if (end === -1) end = n
+      segs.push({ kind: 'com', text: code.slice(i, end) })
+      i = end; continue
+    }
+    // strings: '…"…"…' with backslash escapes
+    const ch = code[i]
+    if (ch === '"' || ch === "'" || (ch === '`' && langKey === 'js')) {
+      flush()
+      let j = i + 1
+      while (j < n) {
+        if (code[j] === '\\') { j += 2; continue }
+        if (code[j] === ch) { j++; break }
+        if (ch !== '`' && code[j] === '\n') break // unterminated single-line string
+        j++
+      }
+      segs.push({ kind: 'str', text: code.slice(i, j) })
+      i = j; continue
+    }
+    buf += ch; i++
+  }
+  flush()
+  return segs
+}
+
+// Highlight one `rest` segment: keywords first, then numbers — numbers must
+// not re-match inside already-emitted spans, so each pass splices the text.
+function hlRest (text, spec) {
+  let out = [{ hl: null, text }]
+  const apply = (re, cls) => {
+    const next = []
+    for (const part of out) {
+      if (part.hl) { next.push(part); continue }
+      let last = 0
+      const s = part.text
+      re.lastIndex = 0
+      let m
+      while ((m = re.exec(s))) {
+        if (m.index > last) next.push({ hl: null, text: s.slice(last, m.index) })
+        next.push({ hl: cls, text: m[0] })
+        last = m.index + m[0].length
+        if (m[0].length === 0) re.lastIndex++
+      }
+      if (last < s.length) next.push({ hl: null, text: s.slice(last) })
+    }
+    out = next
+  }
+  apply(spec.kw, 'tok-kw')
+  apply(spec.num, 'tok-num')
+  return out
+}
+
+function highlightCode (code, lang) {
+  const raw = String(code == null ? '' : code)
+  const key = String(lang || '').trim().toLowerCase()
+  const canonical = Object.prototype.hasOwnProperty.call(HL_ALIAS, key) ? HL_ALIAS[key] : (HL_LANGS[key] ? key : undefined)
+  if (raw.length > HL_MAX_LEN) return esc(raw)
+  if (key === 'json') {
+    // JSON: strings/numbers via a strict pass over the whole text.
+    const out = []
+    const re = /"(?:[^"\\]|\\.)*"\s*:|"(?:[^"\\]|\\.)*"|-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b|\b(?:true|false|null)\b/g
+    let last = 0, m
+    while ((m = re.exec(raw))) {
+      if (m.index > last) out.push(esc(raw.slice(last, m.index)))
+      const t = m[0]
+      const cls = t.startsWith('"') ? (t.trimEnd().endsWith(':') ? 'tok-fn' : 'tok-str') : (m[0] === 'true' || m[0] === 'false' || m[0] === 'null' ? 'tok-kw' : 'tok-num')
+      out.push('<span class="' + cls + '">' + esc(t) + '</span>')
+      last = m.index + t.length
+    }
+    out.push(esc(raw.slice(last)))
+    return out.join('')
+  }
+  if (key === 'html' || key === 'xml') {
+    // Tags and comments only — attributes left plain (no HTML parser here).
+    const out = []
+    const re = /<!--[\s\S]*?-->|<\/?[\w:-]+(?:\s+[^<>]*?)?\/?>/g
+    let last = 0, m
+    while ((m = re.exec(raw))) {
+      if (m.index > last) out.push(esc(raw.slice(last, m.index)))
+      const t = m[0]
+      const cls = t.startsWith('<!--') ? 'tok-com' : 'tok-kw'
+      out.push('<span class="' + cls + '">' + esc(t) + '</span>')
+      last = m.index + t.length
+    }
+    out.push(esc(raw.slice(last)))
+    return out.join('')
+  }
+  if (!canonical) return esc(raw)
+  const spec = HL_LANGS[canonical]
+  const segs = hlSegment(raw, canonical)
+  const out = []
+  for (const seg of segs) {
+    if (seg.kind === 'com') out.push('<span class="tok-com">' + esc(seg.text) + '</span>')
+    else if (seg.kind === 'str') out.push('<span class="tok-str">' + esc(seg.text) + '</span>')
+    else for (const part of hlRest(seg.text, spec)) {
+      out.push(part.hl ? '<span class="' + part.hl + '">' + esc(part.text) + '</span>' : esc(part.text))
+    }
+  }
+  return out.join('')
+}
+
+// Range selection for the gutter drag. Pure so it can be unit-tested.
+// currentSel: null (= all selected) or a Set of turn ids. Returns a new Set
+// covering turns[fromId..toId] inclusive; fromId > toId is normalized.
+function applyRangeSelection (currentSel, allIds, fromId, toId) {
+  const lo = Math.min(fromId, toId)
+  const hi = Math.max(fromId, toId)
+  return new Set(allIds.filter(id => id >= lo && id <= hi))
 }
 
 function svgWrap (bodyHtml, width, height, css, th) {
@@ -380,6 +602,32 @@ function solidColor (color, over) {
   return 'rgb(' + m(c.r, o.r) + ',' + m(c.g, o.g) + ',' + m(c.b, o.b) + ')'
 }
 
+// Fixed export palettes for theme override. Structure mirrors snapshotTheme();
+// hand-calibrated for readability when the app theme itself is unusable (e.g.
+// dark app + light share for group chats). Exported code-token colors are
+// carried here too so PNG, HTML and PDF stay consistent in both modes.
+function fixedThemePalette (mode) {
+  const light = {
+    bg: '#ffffff', fg: '#1a1a1a', card: '#f6f6f6', border: 'rgba(0,0,0,0.14)',
+    accent: '#2563eb', muted: '#6b7280', codeBg: '#f3f4f6',
+    tok: { kw: '#7c3aed', str: '#16a34a', com: '#9ca3af', num: '#ea580c', fn: '#2563eb' }
+  }
+  const dark = {
+    bg: '#1e1f22', fg: '#e6e6e6', card: '#2a2b2f', border: 'rgba(255,255,255,0.16)',
+    accent: '#60a5fa', muted: '#9ca3af', codeBg: '#26272b',
+    tok: { kw: '#c4b5fd', str: '#86efac', com: '#6b7280', num: '#fdba74', fn: '#93c5fd' }
+  }
+  return mode === 'dark' ? dark : light
+}
+
+// Theme resolution for exports: 'auto' snapshots the live app theme (no tok —
+// token colors are only provided by fixed palettes), fixed modes return the
+// hand-calibrated palette. All export paths must go through this.
+function resolveTheme (mode, liveTheme) {
+  if (mode === 'light' || mode === 'dark') return fixedThemePalette(mode)
+  return liveTheme || fixedThemePalette('light')
+}
+
 function isDarkColor (color) {
   const c = parseCssRgba(color)
   if (!c) return false
@@ -416,4 +664,4 @@ async function stitchPngs (blobs) {
   } finally { urls.forEach(u => URL.revokeObjectURL(u)) }
 }
 
-export { esc,baseName,mdToXhtml,inline,fmtTs,snapshotTheme,exportCss,turnXhtml,svgWrap,slugTitle,fragWithCss,buildPages,loadSvgImage,pageToPng,normalizeSessionInfo,buildMetaLine,parseCssRgba,solidColor,isDarkColor,stitchPngs }
+export { esc,baseName,mdToXhtml,inline,fmtTs,snapshotTheme,exportCss,turnXhtml,turnJson,exportJson,hlEscape,hlSegment,hlRest,highlightCode,applyRangeSelection,svgWrap,slugTitle,fragWithCss,buildPages,loadSvgImage,pageToPng,normalizeSessionInfo,buildMetaLine,parseCssRgba,solidColor,fixedThemePalette,resolveTheme,isDarkColor,stitchPngs }
