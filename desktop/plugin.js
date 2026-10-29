@@ -12,7 +12,7 @@ import { useEffect, useState } from 'react'
 const PLUGIN_ID = 'hermes-chat-share'
 // Keep in sync with plugin.yaml. Rendered as a tiny badge in the page header
 // so "did my update actually load?" is always answerable at a glance.
-const PLUGIN_VERSION = '1.1.5'
+const PLUGIN_VERSION = '1.1.6'
 const ROUTE = '/chat-share'
 
 // ==== CORE START ==== (dependency-free export core; mirrored by the test harness)
@@ -204,7 +204,12 @@ function snapshotTheme () {
 
 function exportCss (th, opt) {
   const fs = (opt.scale || 1) * 15
-  return [
+  // MUST join to a STRING before returning. Returning the bare array made
+  // every call site string-concat comma-join the rules (Array toString),
+  // corrupting the stylesheet — items 1/2 are halves of ONE rule, so the
+  // comma landed inside a declaration list and invalidated most of the CSS.
+  // This is why exports rendered near-unstyled between v1.1.0 and v1.1.5.
+  const css = [
     '.chsh-wrap{box-sizing:border-box;font-family:-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC","Source Han Sans SC",sans-serif;',
     'font-size:' + fs + 'px;line-height:1.6;color:' + th.fg + ';background:' + th.bg + ';word-break:break-word;}',
     '.chsh-wrap *{box-sizing:border-box;margin:0;padding:0;}',
@@ -257,7 +262,6 @@ function exportCss (th, opt) {
       '.chsh-body .tok-fn{color:' + th.tok.fn + ';}'
     )
   }
-  css.push('') // trailing newline-free join, keeps existing .join('') shape
   return css.join('')
 }
 
