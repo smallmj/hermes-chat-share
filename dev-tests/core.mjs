@@ -191,7 +191,7 @@ function exportCss (th, opt) {
     'font-size:' + fs + 'px;line-height:1.6;color:' + th.fg + ';background:' + th.bg + ';word-break:break-word;}',
     '.chsh-wrap *{box-sizing:border-box;margin:0;padding:0;}',
     '.chsh-pad{padding:28px 26px;}',
-    '.chsh-title{font-size:' + (fs * 1.25) + 'px;font-weight:600;margin-bottom:4px;}',
+    '.chsh-title{font-size:' + (fs * 1.7) + 'px;font-weight:700;line-height:1.3;margin-bottom:8px;}',
     '.chsh-meta{font-size:' + (fs * 0.75) + 'px;color:' + th.muted + ';margin-bottom:22px;}',
     '.chsh-turn{margin:0 0 22px;page-break-inside:avoid;}',
     '.chsh-who{font-size:' + (fs * 0.8) + 'px;font-weight:600;color:' + th.muted + ';margin:0 0 6px;display:flex;}',
