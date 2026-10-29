@@ -7,7 +7,7 @@ import {
   usePluginI18n
 } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 
 const PLUGIN_ID = 'hermes-chat-share'
 const ROUTE = '/chat-share'
@@ -47,7 +47,9 @@ function mdToXhtml (src, opts) {
       i++
       while (i < L.length && !closeRe.test(L[i])) { buf.push(L[i]); i++ }
       i++
-      out.push('<pre><code' + (fence[2] ? ' class="lang-' + esc(fence[2]) + '"' : '') + '>' + esc(buf.join('\n')) + '</code></pre>')
+      const lang = fence[2] || ''
+      out.push('<pre><code' + (lang ? ' class="lang-' + esc(lang) + '"' : '') + '>' +
+        highlightCode(buf.join('\n'), lang) + '</code></pre>')
       continue
     }
 
@@ -227,7 +229,20 @@ function exportCss (th, opt) {
     '.chsh-ph{color:' + th.muted + ';border:1px dashed ' + th.border + ';border-radius:6px;padding:0 6px;font-size:0.85em;}',
     '.chsh-img{max-width:100%;height:auto;border-radius:8px;margin:6px 0;display:block;}',
     '.chsh-foot{margin-top:26px;padding-top:12px;border-top:1px solid ' + th.border + ';font-size:' + (fs * 0.72) + 'px;color:' + th.muted + ';}'
-  ].join('')
+  ]
+  // Syntax-highlight token colors (only present on fixed palettes; auto theme
+  // exports keep plain code, matching the pre-highlight look).
+  if (th.tok) {
+    css.push(
+      '.chsh-body .tok-kw{color:' + th.tok.kw + ';}',
+      '.chsh-body .tok-str{color:' + th.tok.str + ';}',
+      '.chsh-body .tok-com{color:' + th.tok.com + ';font-style:italic;}',
+      '.chsh-body .tok-num{color:' + th.tok.num + ';}',
+      '.chsh-body .tok-fn{color:' + th.tok.fn + ';}'
+    )
+  }
+  css.push('') // trailing newline-free join, keeps existing .join('') shape
+  return css.join('')
 }
 
 // One turn → XHTML fragment (used by measurement, PNG and HTML export).
@@ -250,6 +265,213 @@ function turnXhtml (turn, opt, th) {
       '<span class="chsh-tool">🔧 ' + esc(t.name) + '</span>').join('') + '</div>'
   }
   return s + '</div>'
+}
+
+// One turn → JSON-safe object. Honors the same share-scope rules as the other
+// exports: full === false keeps only the final assistant reply, tools=false
+// drops tool calls. Pure so it can be unit-tested from the extracted CORE.
+function turnJson (turn, opt) {
+  const assts = opt.full === false ? turn.asst.slice(-1) : turn.asst
+  return {
+    id: turn.id,
+    user: turn.user ? { text: turn.user.text, ts: turn.user.ts || null } : null,
+    assistant: assts.map(a => ({ text: a.text, ts: a.ts || null })),
+    tools: (opt.tools && opt.full !== false)
+      ? turn.tools.map(x => ({ name: x.name, context: x.ctx || '' }))
+      : []
+  }
+}
+
+function exportJson (turns, meta, title, opt) {
+  const payload = {
+    title: title || '',
+    exportedAt: new Date().toISOString(),
+    meta: opt.meta === false ? null : (buildMetaLine(meta) || null),
+    shareFull: opt.full !== false,
+    includeTools: !!(opt.tools && opt.full !== false),
+    turns: turns.map(x => turnJson(x, opt))
+  }
+  return JSON.stringify(payload, null, 2)
+}
+
+// -- syntax highlighting (dependency-free, conservative) ----------------------
+// Tokenizes a small set of common languages into four token classes. Emits
+// XHTML spans (.tok-kw/.tok-str/.tok-com/.tok-num) with all content escaped.
+// Unknown / missing languages fall back to plain esc() — never worse than the
+// pre-highlight behavior. Oversized blocks skip highlighting so the SVG
+// foreignObject rasterizer (15s timeout) can't be pushed over the edge.
+const HL_MAX_LEN = 10240
+
+const HL_LANGS = {
+  js: {
+    lineComment: ['//'], blockComment: [['/*', '*/']],
+    kw: /\b(?:const|let|var|function|return|if|else|for|while|do|switch|case|break|continue|new|class|extends|super|this|typeof|instanceof|in|of|try|catch|finally|throw|async|await|yield|import|from|export|default|delete|void|null|undefined|true|false|static|get|set|interface|type|enum|implements|readonly|public|private|protected|namespace|declare|as|satisfies|keyof)\b/g,
+    num: /\b(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?)\b/g
+  },
+  py: {
+    lineComment: ['#'],
+    kw: /\b(?:def|return|if|elif|else|for|while|break|continue|class|import|from|as|with|try|except|finally|raise|lambda|pass|global|nonlocal|assert|yield|del|in|is|not|and|or|None|True|False|async|await|self|match|case)\b/g,
+    num: /\b(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|0[oO][0-7_]+|\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?)\b/g
+  },
+  sh: {
+    lineComment: ['#'],
+    kw: /\b(?:if|then|else|elif|fi|for|while|do|done|case|esac|function|return|local|export|source|set|unset|shift|exit|echo|cd|read)\b/g,
+    num: /\b\d+\b/g
+  },
+  css: {
+    lineComment: [], blockComment: [['/*', '*/']],
+    kw: /(?:^|[\s{;])(@[\w-]+)(?=\s|{|:)/g,
+    num: /-?\b\d+(?:\.\d+)?(?:px|em|rem|%|vh|vw|s|ms|deg|fr)?\b/g
+  }
+}
+// alias map → canonical language key
+const HL_ALIAS = {
+  javascript: 'js', jsx: 'js', mjs: 'js', cjs: 'js', node: 'js',
+  ts: 'js', typescript: 'js', tsx: 'js',
+  python: 'py', py3: 'py', python3: 'py',
+  bash: 'sh', shell: 'sh', zsh: 'sh', console: 'sh',
+  json: null, // JSON handled separately
+  html: null, xml: null, // markup handled separately
+  stylesheet: 'css'
+}
+
+function hlEscape (s) { return esc(s) }
+
+// Split source into [comment, string, rest] segments preserving order; the
+// caller highlights keywords/numbers only inside `rest`.
+function hlSegment (code, langKey) {
+  const spec = HL_LANGS[langKey]
+  const segs = []
+  let i = 0
+  const n = code.length
+  let buf = ''
+  const flush = () => { if (buf) { segs.push({ kind: 'rest', text: buf }); buf = '' } }
+  while (i < n) {
+    let matched = false
+    // block comments
+    for (const [open, close] of (spec.blockComment || [])) {
+      if (code.startsWith(open, i)) {
+        flush()
+        const end = code.indexOf(close, i + open.length)
+        const stop = end === -1 ? n : end + close.length
+        segs.push({ kind: 'com', text: code.slice(i, stop) })
+        i = stop; matched = true; break
+      }
+    }
+    if (matched) continue
+    // line comments
+    let lc = null
+    for (const tok of (spec.lineComment || [])) if (code.startsWith(tok, i)) { lc = tok; break }
+    if (lc) {
+      flush()
+      let end = code.indexOf('\n', i)
+      if (end === -1) end = n
+      segs.push({ kind: 'com', text: code.slice(i, end) })
+      i = end; continue
+    }
+    // strings: '…"…"…' with backslash escapes
+    const ch = code[i]
+    if (ch === '"' || ch === "'" || (ch === '`' && langKey === 'js')) {
+      flush()
+      let j = i + 1
+      while (j < n) {
+        if (code[j] === '\\') { j += 2; continue }
+        if (code[j] === ch) { j++; break }
+        if (ch !== '`' && code[j] === '\n') break // unterminated single-line string
+        j++
+      }
+      segs.push({ kind: 'str', text: code.slice(i, j) })
+      i = j; continue
+    }
+    buf += ch; i++
+  }
+  flush()
+  return segs
+}
+
+// Highlight one `rest` segment: keywords first, then numbers — numbers must
+// not re-match inside already-emitted spans, so each pass splices the text.
+function hlRest (text, spec) {
+  let out = [{ hl: null, text }]
+  const apply = (re, cls) => {
+    const next = []
+    for (const part of out) {
+      if (part.hl) { next.push(part); continue }
+      let last = 0
+      const s = part.text
+      re.lastIndex = 0
+      let m
+      while ((m = re.exec(s))) {
+        if (m.index > last) next.push({ hl: null, text: s.slice(last, m.index) })
+        next.push({ hl: cls, text: m[0] })
+        last = m.index + m[0].length
+        if (m[0].length === 0) re.lastIndex++
+      }
+      if (last < s.length) next.push({ hl: null, text: s.slice(last) })
+    }
+    out = next
+  }
+  apply(spec.kw, 'tok-kw')
+  apply(spec.num, 'tok-num')
+  return out
+}
+
+function highlightCode (code, lang) {
+  const raw = String(code == null ? '' : code)
+  const key = String(lang || '').trim().toLowerCase()
+  const canonical = Object.prototype.hasOwnProperty.call(HL_ALIAS, key) ? HL_ALIAS[key] : (HL_LANGS[key] ? key : undefined)
+  if (raw.length > HL_MAX_LEN) return esc(raw)
+  if (key === 'json') {
+    // JSON: strings/numbers via a strict pass over the whole text.
+    const out = []
+    const re = /"(?:[^"\\]|\\.)*"\s*:|"(?:[^"\\]|\\.)*"|-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b|\b(?:true|false|null)\b/g
+    let last = 0, m
+    while ((m = re.exec(raw))) {
+      if (m.index > last) out.push(esc(raw.slice(last, m.index)))
+      const t = m[0]
+      const cls = t.startsWith('"') ? (t.trimEnd().endsWith(':') ? 'tok-fn' : 'tok-str') : (m[0] === 'true' || m[0] === 'false' || m[0] === 'null' ? 'tok-kw' : 'tok-num')
+      out.push('<span class="' + cls + '">' + esc(t) + '</span>')
+      last = m.index + t.length
+    }
+    out.push(esc(raw.slice(last)))
+    return out.join('')
+  }
+  if (key === 'html' || key === 'xml') {
+    // Tags and comments only — attributes left plain (no HTML parser here).
+    const out = []
+    const re = /<!--[\s\S]*?-->|<\/?[\w:-]+(?:\s+[^<>]*?)?\/?>/g
+    let last = 0, m
+    while ((m = re.exec(raw))) {
+      if (m.index > last) out.push(esc(raw.slice(last, m.index)))
+      const t = m[0]
+      const cls = t.startsWith('<!--') ? 'tok-com' : 'tok-kw'
+      out.push('<span class="' + cls + '">' + esc(t) + '</span>')
+      last = m.index + t.length
+    }
+    out.push(esc(raw.slice(last)))
+    return out.join('')
+  }
+  if (!canonical) return esc(raw)
+  const spec = HL_LANGS[canonical]
+  const segs = hlSegment(raw, canonical)
+  const out = []
+  for (const seg of segs) {
+    if (seg.kind === 'com') out.push('<span class="tok-com">' + esc(seg.text) + '</span>')
+    else if (seg.kind === 'str') out.push('<span class="tok-str">' + esc(seg.text) + '</span>')
+    else for (const part of hlRest(seg.text, spec)) {
+      out.push(part.hl ? '<span class="' + part.hl + '">' + esc(part.text) + '</span>' : esc(part.text))
+    }
+  }
+  return out.join('')
+}
+
+// Range selection for the gutter drag. Pure so it can be unit-tested.
+// currentSel: null (= all selected) or a Set of turn ids. Returns a new Set
+// covering turns[fromId..toId] inclusive; fromId > toId is normalized.
+function applyRangeSelection (currentSel, allIds, fromId, toId) {
+  const lo = Math.min(fromId, toId)
+  const hi = Math.max(fromId, toId)
+  return new Set(allIds.filter(id => id >= lo && id <= hi))
 }
 
 function svgWrap (bodyHtml, width, height, css, th) {
@@ -395,6 +617,32 @@ function solidColor (color, over) {
   return 'rgb(' + m(c.r, o.r) + ',' + m(c.g, o.g) + ',' + m(c.b, o.b) + ')'
 }
 
+// Fixed export palettes for theme override. Structure mirrors snapshotTheme();
+// hand-calibrated for readability when the app theme itself is unusable (e.g.
+// dark app + light share for group chats). Exported code-token colors are
+// carried here too so PNG, HTML and PDF stay consistent in both modes.
+function fixedThemePalette (mode) {
+  const light = {
+    bg: '#ffffff', fg: '#1a1a1a', card: '#f6f6f6', border: 'rgba(0,0,0,0.14)',
+    accent: '#2563eb', muted: '#6b7280', codeBg: '#f3f4f6',
+    tok: { kw: '#7c3aed', str: '#16a34a', com: '#9ca3af', num: '#ea580c', fn: '#2563eb' }
+  }
+  const dark = {
+    bg: '#1e1f22', fg: '#e6e6e6', card: '#2a2b2f', border: 'rgba(255,255,255,0.16)',
+    accent: '#60a5fa', muted: '#9ca3af', codeBg: '#26272b',
+    tok: { kw: '#c4b5fd', str: '#86efac', com: '#6b7280', num: '#fdba74', fn: '#93c5fd' }
+  }
+  return mode === 'dark' ? dark : light
+}
+
+// Theme resolution for exports: 'auto' snapshots the live app theme (no tok —
+// token colors are only provided by fixed palettes), fixed modes return the
+// hand-calibrated palette. All export paths must go through this.
+function resolveTheme (mode, liveTheme) {
+  if (mode === 'light' || mode === 'dark') return fixedThemePalette(mode)
+  return liveTheme || fixedThemePalette('light')
+}
+
 function isDarkColor (color) {
   const c = parseCssRgba(color)
   if (!c) return false
@@ -442,7 +690,42 @@ const qAtom = atom('') // search query
 const navAtom = atom({ ids: [], at: -1 }) // search hits (turn ids) + current position
 const activeAtom = atom(null) // turn id highlighted by search/gutter jump
 const askAtom = atom(null) // { blobs: Blob[], reason: string } — copy failed/impossible, ask the user
-const optAtom = atom({ width: 880, scale: 1, tools: true, ts: true, full: true })
+const optAtom = atom({ width: 880, scale: 1, tools: true, ts: true, full: true, theme: 'auto', meta: true })
+const PrefsKey = 'hermes-chat-share:prefs'
+
+// Preference persistence. Silent no-op when localStorage is unavailable
+// (policy-cleared storage must never break the export features).
+function loadPrefs () {
+  try {
+    const raw = localStorage.getItem(PrefsKey)
+    if (!raw) return
+    const p = JSON.parse(raw)
+    const cur = optAtom.get()
+    const next = { ...cur }
+    for (const k of ['width', 'scale', 'tools', 'full', 'theme', 'meta']) {
+      if (p[k] !== undefined) next[k] = p[k]
+    }
+    // Guard against a stale/poisoned store: only accept known enum values.
+    if (!['auto', 'light', 'dark'].includes(next.theme)) next.theme = 'auto'
+    if (![680, 880, 1080].includes(next.width)) next.width = 880
+    if (![0.85, 1, 1.2].includes(next.scale)) next.scale = 1
+    optAtom.set(next)
+  } catch (e) { /* corrupt or blocked storage — keep defaults */ }
+}
+
+function savePrefs () {
+  try {
+    const { width, scale, tools, full, theme, meta } = optAtom.get()
+    localStorage.setItem(PrefsKey, JSON.stringify({ width, scale, tools, full, theme, meta }))
+  } catch (e) { /* storage unavailable — settings just don't persist */ }
+}
+
+// Resolved theme for the current export, honoring the override. All export
+// paths call this instead of snapshotTheme directly.
+function exportTheme () {
+  const mode = optAtom.get().theme || 'auto'
+  return mode === 'auto' ? snapshotTheme(document.documentElement) : fixedThemePalette(mode)
+}
 
 const t = (key, ...args) => ctxI18nRef && ctxI18nRef.t(key, ...args)
 let ctxI18nRef = null
@@ -516,12 +799,12 @@ async function renderImages () {
   const ids = new Set(selectedIds())
   const turns = turnsAtom.get().filter(x => ids.has(x.id))
   if (!turns.length) throw new Error('nothing-selected')
-  const th = snapshotTheme(document.documentElement)
+  const th = exportTheme()
   const opt = optAtom.get()
   // The first PNG page carries the title + session meta header (~50px). The
   // chunking pass does not know about it; PAGE_MAX leaves >3500px of headroom
   // under Chrome's 16384 device-px cap, so the extra line cannot overflow it.
-  const ml = buildMetaLine(metaAtom.get())
+  const ml = opt.meta === false ? '' : buildMetaLine(metaAtom.get())
   const pages = buildPages(turns, th, opt)
   const out = []
   for (let k = 0; k < pages.length; k++) {
@@ -679,9 +962,9 @@ async function doDownloadPng () {
 function exportHtml (opts) {
   const ids = new Set(selectedIds())
   const turns = turnsAtom.get().filter(x => ids.has(x.id))
-  const th = snapshotTheme(document.documentElement)
+  const th = exportTheme()
   const opt = { ...optAtom.get(), images: true }
-  const ml = buildMetaLine(metaAtom.get())
+  const ml = opt.meta === false ? '' : buildMetaLine(metaAtom.get())
   const body = '<div class="chsh-wrap"><div class="chsh-pad">' +
     '<div class="chsh-title">' + esc(stateAtom.get().title || t('shareTitle')) + '</div>' +
     '<div class="chsh-meta">' + esc(fmtTs(Date.now() / 1000)) + ' · ' + turns.length + ' ' + t('turnsN') + (ml ? ' · ' + esc(ml) : '') + '</div>' +
@@ -698,7 +981,7 @@ function exportMd () {
   const turns = turnsAtom.get().filter(x => ids.has(x.id))
   const opt = optAtom.get()
   let s = '# ' + (stateAtom.get().title || t('shareTitle')) + '\n\n_' + fmtTs(Date.now() / 1000) + '_\n\n'
-  const ml = buildMetaLine(metaAtom.get())
+  const ml = opt.meta === false ? '' : buildMetaLine(metaAtom.get())
   if (ml) s += '> ' + ml + '\n\n'
   for (const turn of turns) {
     if (turn.user && turn.user.text) s += '## 👤 ' + (turn.user.ts ? fmtTs(turn.user.ts) + ' · ' : '') + 'User\n\n' + turn.user.text + '\n\n'
@@ -711,7 +994,76 @@ function exportMd () {
 }
 
 function doDownloadHtml () { try { download(exportHtml(), fileBase() + '.html'); host.notify({ kind: 'success', message: t('saved') }) } catch (err) { fail(err) } }
+
+// PDF export — zero-dependency print route. Builds a print-tuned HTML doc
+// (light palette, @page margins, per-turn page-break protection), opens it in
+// a blank window and hands the job to the system print dialog ("Save as PDF").
+// window.open can be blocked by Electron policy → fall back to a hidden
+// iframe; if that fails too, tell the user to print the exported HTML file.
+function exportPrintableHtml () {
+  const th = fixedThemePalette('light')
+  const opt = { ...optAtom.get(), images: true }
+  const ids = new Set(selectedIds())
+  const turns = turnsAtom.get().filter(x => ids.has(x.id))
+  const ml = opt.meta === false ? '' : buildMetaLine(metaAtom.get())
+  const body = '<div class="chsh-wrap"><div class="chsh-pad">' +
+    '<div class="chsh-title">' + esc(stateAtom.get().title || t('shareTitle')) + '</div>' +
+    '<div class="chsh-meta">' + esc(fmtTs(Date.now() / 1000)) + ' · ' + turns.length + ' ' + t('turnsN') + (ml ? ' · ' + esc(ml) : '') + '</div>' +
+    turns.map(x => turnXhtml(x, { images: true, tools: opt.tools, full: opt.full }, th)).join('') +
+    '<div class="chsh-foot">Hermes</div></div></div>'
+  return '<!DOCTYPE html><html><head><meta charset="utf-8"/><title>' + esc(stateAtom.get().title || 'Hermes') +
+    '</title><style>@page{margin:18mm;}body{margin:0;background:' + th.bg + ';}' +
+    exportCss(th, opt) +
+    '.chsh-wrap img{max-width:100%;}.chsh-wrap .chsh-body{min-width:0;}' +
+    '.chsh-body pre{white-space:pre-wrap;}</style></head><body>' + body + '</body></html>'
+}
+
+function printHtmlDocument (html) {
+  // Returns true when the print dialog was triggered.
+  let win = null
+  try { win = window.open('', '_blank') } catch (e) { /* popup blocked */ }
+  if (win && win.document) {
+    win.document.open(); win.document.write(html); win.document.close()
+    const w = win
+    setTimeout(() => { try { w.focus(); w.print() } catch (e) { /* user prints manually */ } }, 250)
+    return true
+  }
+  try {
+    const iframe = document.createElement('iframe')
+    iframe.style.cssText = 'position:fixed;left:-99999px;top:0;width:0;height:0;border:0;'
+    document.body.appendChild(iframe)
+    const doc = iframe.contentDocument
+    doc.open(); doc.write(html); doc.close()
+    const done = () => setTimeout(() => iframe.remove(), 4000)
+    iframe.onload = done
+    setTimeout(() => { try { iframe.contentWindow.focus(); iframe.contentWindow.print() } catch (e) { /* last resort below */ } done() }, 250)
+    return true
+  } catch (e) { return false }
+}
+
+function doDownloadPdf () {
+  try {
+    const html = exportPrintableHtml()
+    if (!printHtmlDocument(html)) {
+      // Both routes blocked — save the print-ready file and tell the user.
+      download(new Blob([html], { type: 'text/html;charset=utf-8' }), fileBase() + '-print.html')
+      host.notify({ kind: 'info', message: t('pdfFallback') })
+      return
+    }
+    host.notify({ kind: 'info', message: t('pdfHint') })
+  } catch (err) { fail(err) }
+}
 function doDownloadMd () { try { download(exportMd(), fileBase() + '.md'); host.notify({ kind: 'success', message: t('saved') }) } catch (err) { fail(err) } }
+function doDownloadJson () {
+  try {
+    const ids = new Set(selectedIds())
+    const turns = turnsAtom.get().filter(x => ids.has(x.id))
+    const opt = optAtom.get()
+    const s = exportJson(turns, metaAtom.get(), stateAtom.get().title, opt)
+    download(new Blob([s], { type: 'application/json;charset=utf-8' }), fileBase() + '.json')
+    host.notify({ kind: 'success', message: t('saved') })
+  } catch (err) { fail(err) }
+}
 
 function fail (err) {
   const msg = String((err && err.message) || err)
@@ -730,21 +1082,55 @@ function jumpToTurn (id, expand) {
 }
 
 // Hermes-chat-style segmented gutter: one tick per turn, click to jump.
+// Drag across ticks to select a contiguous range (pointer capture keeps the
+// gesture alive outside the 10px rail; touch-action:none stops scroll steal).
+const dragAtom = atom(null) // { fromId, toId } while a gutter drag is active
+
 function Gutter ({ turns }) {
   const activeId = useValue(activeAtom)
+  const drag = useValue(dragAtom)
+  const sel = useValue(selAtom)
   if (turns.length < 2) return null
   const gap = turns.length > 40 ? 1 : 2
+  const dragStart = (id, e) => {
+    e.preventDefault()
+    try { e.currentTarget.setPointerCapture(e.pointerId) } catch (err) { /* capture is best-effort */ }
+    dragAtom.set({ fromId: id, toId: id, moved: false })
+  }
+  const dragMove = (id) => {
+    const d = dragAtom.get()
+    if (!d) return
+    if (id !== d.toId) dragAtom.set({ ...d, toId: id, moved: true })
+    else if (!d.moved) dragAtom.set({ ...d, toId: id })
+  }
+  const dragEnd = (id) => {
+    const d = dragAtom.get()
+    dragAtom.set(null)
+    if (!d) return
+    if (!d.moved || d.fromId === d.toId) { jumpToTurn(id); return } // click, not drag
+    const allIds = turns.map(x => x.id)
+    selAtom.set(applyRangeSelection(sel, allIds, d.fromId, d.toId))
+  }
+  const inDrag = id => drag && id >= Math.min(drag.fromId, drag.toId) && id <= Math.max(drag.fromId, drag.toId)
   return jsx('div', {
     className: 'absolute top-3 bottom-3 right-0 w-[10px] flex flex-col z-30',
     style: { gap: gap + 'px' },
     children: turns.map(x => {
       const snippet = (((x.user && x.user.text) || (x.asst[0] && x.asst[0].text) || '') + '').replace(/\s+/g, ' ').slice(0, 48)
+      const highlighted = inDrag(x.id)
       return jsx('div', {
         role: 'button',
         title: (x.id + 1) + '. ' + snippet,
-        onClick: () => jumpToTurn(x.id),
+        onPointerDown: e => dragStart(x.id, e),
+        onPointerMove: () => dragMove(x.id),
+        onPointerUp: () => dragEnd(x.id),
         className: 'flex-1 min-h-[2px] rounded-full',
-        style: { background: x.id === activeId ? 'var(--accent)' : 'var(--border)', cursor: 'pointer' }
+        style: {
+          background: highlighted ? 'var(--accent)' : (x.id === activeId ? 'var(--accent)' : 'var(--border)'),
+          opacity: highlighted ? 0.55 : 1,
+          cursor: 'pointer',
+          touchAction: 'none'
+        }
       }, 'g' + x.id)
     })
   })
@@ -848,6 +1234,24 @@ function Toolbar () {
       value: String(opt.scale), onChange: e => setOpt({ scale: Number(e.target.value) }),
       children: [0.85, 1, 1.2].map(s => jsx('option', { value: String(s), children: t('fontN', Math.round(15 * s)) }, s))
     }),
+    jsx('span', { className: 'text-xs text-(--muted-foreground) shrink-0 ml-1', children: t('themeL') }),
+    jsx('select', {
+      className: 'text-xs rounded-md border border-(--border) bg-transparent px-1.5 py-1 text-(--foreground) shrink-0',
+      style: { width: 92 },
+      value: opt.theme || 'auto', onChange: e => setOpt({ theme: e.target.value }),
+      children: ['auto', 'light', 'dark'].map(m => jsx('option', { value: m, children: t('themeM', m) }, m))
+    }),
+    jsx('label', {
+      className: 'flex items-center gap-1.5 text-xs text-(--foreground) cursor-pointer select-none',
+      children: [
+        jsx('input', {
+          type: 'checkbox', checked: opt.meta !== false,
+          onChange: () => setOpt({ meta: opt.meta === false }),
+          className: 'size-3.5 accent-(--accent)'
+        }),
+        t('toggleMeta')
+      ]
+    }, 'meta'),
     jsx('label', {
       className: 'flex items-center gap-1.5 text-xs text-(--foreground) cursor-pointer select-none',
       children: [
@@ -872,13 +1276,50 @@ function Toolbar () {
     }, 'full'),
     jsx('span', { className: 'flex-1' }),
     jsx(Button, { size: 'sm', onClick: () => void doDownloadMd(), children: 'Markdown' }),
+    jsx(Button, { size: 'sm', onClick: () => void doDownloadJson(), children: 'JSON' }),
     jsx(Button, { size: 'sm', onClick: () => void doDownloadHtml(), children: 'HTML' }),
+    jsx(Button, { size: 'sm', onClick: () => void doDownloadPdf(), children: t('btnPdf') }),
     jsx(Button, { size: 'sm', onClick: () => void doDownloadPng(), children: t('btnPng') }),
     jsx(Button, { size: 'sm', onClick: () => void doCopyPng(), children: t('btnCopyPng') })
       ] }),
-      ml ? jsx('div', { className: 'text-xs text-(--muted-foreground)', children: ml }, 'meta') : null
+      (opt.meta !== false && ml) ? jsx('div', { className: 'text-xs text-(--muted-foreground)', children: ml }, 'meta') : null
     ]
   })
+}
+
+// Editable conversation title for exports. Editing only affects the current
+// export's title text — it never writes back to the session itself.
+function TitleHeader ({ t, st }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const commit = () => {
+    const v = draft.trim()
+    if (v) stateAtom.set({ ...stateAtom.get(), title: v })
+    setEditing(false)
+  }
+  return jsxs('div', { className: 'flex items-center gap-2 px-4 pt-3 pb-1', children: [
+    editing
+      ? jsx('input', {
+          autoFocus: true,
+          className: 'font-medium text-sm min-w-0 flex-1 rounded-md border border-(--accent) bg-transparent px-2 py-1 text-(--foreground)',
+          value: draft,
+          onChange: e => setDraft(e.target.value),
+          onBlur: commit,
+          onKeyDown: e => {
+            if (e.key === 'Enter') { e.preventDefault(); commit() }
+            if (e.key === 'Escape') setEditing(false)
+          }
+        })
+      : jsx('div', {
+          className: 'font-medium text-sm min-w-0 truncate whitespace-nowrap cursor-text',
+          title: t('editTitleTip'),
+          onClick: () => { setDraft(st.title || ''); setEditing(true) },
+          children: st.title || t('shareTitle')
+        }),
+    st.sid ? jsx('span', { className: 'text-xs text-(--muted-foreground)', children: st.sid.slice(0, 8) + '…' }) : null,
+    jsx('span', { className: 'flex-1' }),
+    st.loading ? jsx(GlyphSpinner, { className: 'text-(--muted-foreground)' }) : null
+  ] })
 }
 
 function SharePage () {
@@ -888,11 +1329,21 @@ function SharePage () {
   const sel = useValue(selAtom)
   const exp = useValue(expAtom)
   const activeId = useValue(activeAtom)
+  const drag = useValue(dragAtom)
+  const opt = useValue(optAtom)
   // Follow whatever conversation the user is looking at: switching sessions in
   // the sidebar re-fetches automatically — no manual Refresh round-trip.
   const focus = useValue(host.state.focusedStoredSessionId)
   const active = useValue(host.state.activeSessionId)
   const sid = focus || active || ''
+
+  // Restore remembered export prefs once, then persist every change (debounced
+  // write; storage failures are silently ignored by design).
+  useEffect(() => { loadPrefs() }, [])
+  useEffect(() => {
+    const iv = setTimeout(savePrefs, 400)
+    return () => clearTimeout(iv)
+  }, [opt])
 
   useEffect(() => {
     if (sid) void fetchTurnsFor(sid)
@@ -911,15 +1362,23 @@ function SharePage () {
     expAtom.set(set)
   }
 
+  // Range-selection feedback strip (shown while dragging or after a drag).
+  const range = drag && drag.moved && drag.fromId !== drag.toId
+    ? { lo: Math.min(drag.fromId, drag.toId), hi: Math.max(drag.fromId, drag.toId) }
+    : null
+
   return jsxs('div', { className: 'flex flex-col h-full min-h-0', children: [
-    jsxs('div', { className: 'flex items-center gap-2 px-4 pt-3 pb-1', children: [
-      jsx('div', { className: 'font-medium text-sm min-w-0 truncate whitespace-nowrap', children: st.title || t('shareTitle') }),
-      st.sid ? jsx('span', { className: 'text-xs text-(--muted-foreground)', children: st.sid.slice(0, 8) + '…' }) : null,
-      jsx('span', { className: 'flex-1' }),
-      st.loading ? jsx(GlyphSpinner, { className: 'text-(--muted-foreground)' }) : null
-    ] }),
+    jsx(TitleHeader, { t, st }),
     jsx(Toolbar, {}),
     jsx(AskModal, {}),
+    range ? jsxs('div', {
+      className: 'flex items-center gap-2 px-4 py-1 text-xs bg-(--accent)/10 text-(--foreground) border-b border-(--border)',
+      children: [
+        jsx('span', { children: t('rangeTip', (range.lo + 1) + '~' + (range.hi + 1)) }),
+        jsx(Button, { size: 'xs', variant: 'text', onClick: () => selAtom.set(new Set(turns.map(x => x.id))), children: t('selectAll') }),
+        jsx(Button, { size: 'xs', variant: 'text', onClick: () => selAtom.set(null), children: t('rangeClear') })
+      ]
+    }, 'rangeclear') : null,
     st.error ? jsxs('div', { className: 'p-6 flex flex-col items-start gap-3', children: [
       jsx(EmptyState, { title: t('loadFail'), description: st.error === 'no-focused-session' ? t('needSession') : st.error }),
       jsx(Button, { size: 'sm', onClick: () => void fetchTurns(), children: t('retry') })
@@ -964,7 +1423,15 @@ const STRINGS = {
     widthL: 'Width', fontL: 'Font',
     expand: (a, b) => 'expand (' + a + ' more repl' + (a === 1 ? 'y' : 'ies') + (b ? ' · ' + b + ' tool calls' : '') + ')',
     collapse: 'collapse',
-    fullLabel: 'share full conversation'
+    fullLabel: 'share full conversation',
+    themeL: 'Theme', themeM: m => m === 'auto' ? 'follow app' : (m === 'light' ? 'light' : 'dark'),
+    toggleMeta: 'session info',
+    btnPdf: 'PDF / Print',
+    pdfHint: 'Print dialog opened — choose "Save as PDF".',
+    pdfFallback: 'Print was blocked; a print-ready HTML file was downloaded instead — open it and print to PDF.',
+    rangeTip: n => 'selected turns ' + n,
+    rangeClear: 'clear',
+    editTitleTip: 'Click to edit the export title'
   },
   'zh': {
     navLabel: '分享对话',
@@ -991,7 +1458,15 @@ const STRINGS = {
     widthL: '宽度', fontL: '字号',
     expand: (a, b) => '展开（' + a + ' 条中间回复' + (b ? ' · ' + b + ' 个工具调用' : '') + '）',
     collapse: '收起',
-    fullLabel: '分享完整对话'
+    fullLabel: '分享完整对话',
+    themeL: '主题', themeM: m => m === 'auto' ? '跟随应用' : (m === 'light' ? '浅色' : '深色'),
+    toggleMeta: '会话信息',
+    btnPdf: 'PDF / 打印',
+    pdfHint: '已打开打印对话框 — 选择「另存为 PDF」。',
+    pdfFallback: '打印被阻止；已改为下载打印友好 HTML 文件，打开后打印为 PDF 即可。',
+    rangeTip: n => '已选第 ' + n + ' 轮',
+    rangeClear: '清除',
+    editTitleTip: '点击编辑导出标题'
   }
 }
 

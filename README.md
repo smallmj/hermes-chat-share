@@ -42,7 +42,7 @@ If the page doesn't show up: `⌘K / Ctrl+K` → `Reload desktop plugins`. On/of
 **Four entry points** — the share icon on each conversation's title bar (opens that conversation directly), the sidebar page, the command palette (`Share conversation`), and `Ctrl/Cmd+Shift+H`. The page follows the conversation you switch to; no refresh button, no stale state.
 
 **Built for long conversations**
-- **Turn gutter**: segmented rail on the right — one tick per turn, hover to preview the question, click to jump straight there.
+- **Turn gutter**: segmented rail on the right — one tick per turn, hover to preview the question, click to jump straight there. **Drag across ticks to select a contiguous range** of turns in one gesture.
 - **Search**: matches questions and answers; `Enter` / `Shift+Enter` / ↑ ↓ cycle through hits with a `3/17` counter; each hit auto-expands and gets an accent outline.
 - **Per-turn collapsing**: every turn shows just your question and the final answer; *expand (N more replies · M tool calls)* reveals the rest, per turn.
 - **Share-scope checkbox**: uncheck “share full conversation” and **all three exports** contain only question + final answer — exactly what the collapsed view shows.
@@ -51,9 +51,12 @@ If the page doesn't show up: `⌘K / Ctrl+K` → `Reload desktop plugins`. On/of
 
 **Exports**
 - **PNG long image** at 680/880/1080 px wide, three font scales, 2× DPR, colors snapshotted from your live app theme (light *and* dark). Tall exports auto-paginate; multi-page downloads are **stitched back into one long PNG**, so the browser's one-download-per-page limit never eats pages.
+- **Theme override** — force **light or dark** for the export regardless of your app theme (dark-app users sharing readable light images into group chats), with hand-calibrated fixed palettes. Code blocks are **syntax highlighted** (JS/TS, Python, JSON, Shell, HTML/XML, CSS) in both palettes.
 - **Copy image** stays honest: it goes to the clipboard as rich text with inline base64 (pastes straight into WPS / Word / Google Docs). When a copy genuinely cannot happen — the image spans pages, or desktop security policy blocks plugin clipboard writes — a dialog explains the exact reason and lets **you** choose *Download image* or *Cancel*. It never downloads behind your back.
-- **Self-contained HTML** and **Markdown**, each a single file.
+- **Self-contained HTML**, **Markdown**, and **JSON** (machine-readable turns with the same share-scope rules as the visual exports), each a single file.
+- **PDF via print** — one click opens a print-tuned view (light palette, page margins, per-turn page-break protection); choose *Save as PDF* in the dialog.
 - Keeps real rendering: code blocks, tables, quotes, inline code, tool-call chips (checkbox-controlled), timestamps. External images, `MEDIA:` attachments and `::preview` widgets become labeled placeholders in PNGs (canvas-taint rules) and keep their links in HTML/Markdown.
+- **Your export prefs are remembered** (width, font, theme, toggles) and the export **title is editable** inline before you share.
 
 **The UI follows the app language** (English / 简体中文 automatically), and dialogs are opaque and theme-correct in both modes.
 
