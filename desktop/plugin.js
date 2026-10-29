@@ -15,6 +15,9 @@ const ROUTE = '/chat-share'
 // ==== CORE START ==== (dependency-free export core; mirrored by the test harness)
 function esc (s) {
   return String(s == null ? '' : s)
+    // XML-invalid control chars (ANSI escapes \x1b, NUL… from captured logs)
+    // would kill the SVG XML parse in the PNG pipeline — drop them, keep \n \t.
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
 }
@@ -216,9 +219,10 @@ function exportCss (th, opt) {
     '.chsh-body hr{border:none;border-top:1px solid ' + th.border + ';margin:12px 0;}',
     '.chsh-body a{color:' + th.accent + ';text-decoration:none;}',
     '.chsh-body code{background:' + th.codeBg + ';border:1px solid ' + th.border + ';border-radius:4px;padding:1px 5px;font-size:0.9em;',
-    'font-family:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Consolas,"Noto Sans Mono CJK SC",monospace;}',
+    'font-family:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Consolas,"Microsoft YaHei","PingFang SC","Noto Sans CJK SC",monospace;}',
     '.chsh-body pre{background:' + th.codeBg + ';border:1px solid ' + th.border + ';border-radius:10px;padding:12px 14px;margin:0 0 10px;',
-    'white-space:pre-wrap;font-size:0.86em;line-height:1.5;}',
+    'white-space:pre-wrap;font-size:0.86em;line-height:1.5;',
+    'font-family:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Consolas,"Microsoft YaHei","PingFang SC","Noto Sans CJK SC",monospace;}',
     '.chsh-body pre code{background:none;border:none;padding:0;font-size:inherit;}',
     '.chsh-body table{border-collapse:collapse;width:100%;margin:0 0 10px;font-size:0.92em;}',
     '.chsh-body th,.chsh-body td{border:1px solid ' + th.border + ';padding:6px 9px;text-align:left;}',
@@ -245,25 +249,37 @@ function exportCss (th, opt) {
   return css.join('')
 }
 
-// One turn → XHTML fragment (used by measurement, PNG and HTML export).
+// Per-part renderers. A turn is exported as up to three visual parts (user
+// bubble, assistant replies, tool chips); the PNG pager can place parts on
+// different pages and even split one giant reply across pages, while
+// turnXhtml (HTML export) keeps composing them exactly as before.
+function userXhtml (turn, opt) {
+  if (!turn.user || !turn.user.text) return ''
+  return '<div class="chsh-user"><div class="chsh-who">👤' +
+    (turn.user.ts ? '<span class="chsh-ts">' + fmtTs(turn.user.ts) + '</span>' : '') + '</div>' +
+    '<div class="chsh-body">' + mdToXhtml(turn.user.text, { images: opt.images }) + '</div></div>'
+}
+
+function asstXhtml (a, opt) {
+  return '<div class="chsh-asst"><div class="chsh-who">🤖' +
+    (a.ts ? '<span class="chsh-ts">' + fmtTs(a.ts) + '</span>' : '') + '</div>' +
+    '<div class="chsh-body">' + mdToXhtml(a.text, { images: opt.images }) + '</div></div>'
+}
+
+function toolsXhtml (turn) {
+  if (!turn.tools.length) return ''
+  return '<div class="chsh-tools">' + turn.tools.map(t =>
+    '<span class="chsh-tool">🔧 ' + esc(t.name) + '</span>').join('') + '</div>'
+}
+
+// One turn → XHTML fragment (used by HTML export; the PNG pager uses parts).
 function turnXhtml (turn, opt, th) {
   let s = '<div class="chsh-turn" data-turn="' + turn.id + '">'
-  if (turn.user && turn.user.text) {
-    s += '<div class="chsh-user"><div class="chsh-who">👤' +
-      (turn.user.ts ? '<span class="chsh-ts">' + fmtTs(turn.user.ts) + '</span>' : '') + '</div>' +
-      '<div class="chsh-body">' + mdToXhtml(turn.user.text, { images: opt.images }) + '</div></div>'
-  }
+  s += userXhtml(turn, opt)
   // full === false → keep only the final assistant reply, drop tool chips
   const assts = opt.full === false && turn.asst.length ? [turn.asst[turn.asst.length - 1]] : turn.asst
-  for (const a of assts) {
-    s += '<div class="chsh-asst"><div class="chsh-who">🤖' +
-      (a.ts ? '<span class="chsh-ts">' + fmtTs(a.ts) + '</span>' : '') + '</div>' +
-      '<div class="chsh-body">' + mdToXhtml(a.text, { images: opt.images }) + '</div></div>'
-  }
-  if (opt.tools && opt.full !== false && turn.tools.length) {
-    s += '<div class="chsh-tools">' + turn.tools.map(t =>
-      '<span class="chsh-tool">🔧 ' + esc(t.name) + '</span>').join('') + '</div>'
-  }
+  for (const a of assts) s += asstXhtml(a, opt)
+  if (opt.tools && opt.full !== false) s += toolsXhtml(turn)
   return s + '</div>'
 }
 
@@ -474,6 +490,143 @@ function applyRangeSelection (currentSel, allIds, fromId, toId) {
   return new Set(allIds.filter(id => id >= lo && id <= hi))
 }
 
+// -- oversize-turn splitting + minimal PDF writer (pure, CORE-tested) ---------
+// A single reply taller than one PNG page (huge log dumps are the classic
+// case) must be split across pages, or its page exceeds Chromium's 16384
+// device-px GPU-texture cap and renders partially/blank — silently.
+//
+// splitLongText splits markdown into well-formed chunks: fenced code blocks
+// are atomic unless themselves oversized (then the INNER lines are sliced and
+// each slice re-wrapped in the same fence), plain groups split on lines, and
+// even a single monstrous line is char-cut as a last resort. `fits(chunk)`
+// is the caller's measured height predicate.
+function mdBlocks (text) {
+  const lines = String(text == null ? '' : text).replace(/\r\n/g, '\n').split('\n')
+  const blocks = []
+  let i = 0
+  while (i < lines.length) {
+    const fence = lines[i].match(/^\s*(```|~~~)\s*(\S*)\s*$/)
+    if (fence) {
+      const closeRe = new RegExp('^\\s*' + fence[1] + '\\s*$')
+      const inner = []
+      i++
+      while (i < lines.length && !closeRe.test(lines[i])) { inner.push(lines[i]); i++ }
+      if (i < lines.length) i++ // consume closing fence; unterminated → content only
+      blocks.push({ fence: fence[1], lang: fence[2] || '', lines: inner })
+    } else {
+      const buf = [lines[i]]
+      i++
+      while (i < lines.length && !/^\s*(```|~~~)\s*\S*\s*$/.test(lines[i])) { buf.push(lines[i]); i++ }
+      blocks.push({ fence: null, lang: '', lines: buf })
+    }
+  }
+  return blocks
+}
+
+function binaryMax (lo, hi, ok) {
+  let best = lo
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (ok(mid)) { best = mid; lo = mid + 1 } else hi = mid - 1
+  }
+  return best
+}
+
+function splitLongText (text, fits) {
+  const t = String(text == null ? '' : text)
+  if (!t) return [t]
+  if (fits(t)) return [t]
+  const chunks = []
+  let cur = []
+  const flush = () => { if (cur.length) { chunks.push(cur.join('\n')); cur = [] } }
+  const wrapFence = inner => (inner.length ? '```' + '\n' : '') + inner.join('\n') + (inner.length ? '\n```' : '')
+  for (const b of mdBlocks(t)) {
+    const lines = b.fence ? [b.fence + (b.lang ? ' ' + b.lang : ''), ...b.lines, b.fence] : b.lines
+    const cand = (cur.length ? cur.join('\n') + '\n' : '') + lines.join('\n')
+    if (fits(cand)) { for (const ln of lines) cur.push(ln); continue }
+    flush()
+    if (fits(lines.join('\n'))) { for (const ln of lines) cur.push(ln); continue }
+    // the block alone exceeds a page — split inside it
+    if (b.fence) {
+      const full = inner => '```\n' + inner.join('\n') + '\n```'
+      let i = 0
+      while (i < b.lines.length) {
+        const take = binaryMax(1, b.lines.length - i, n => fits(full(b.lines.slice(i, i + n))))
+        if (take === 1 && !fits(full([b.lines[i]]))) {
+          // giant single line inside a fence — char-cut, re-wrapped per slice
+          let s = b.lines[i]
+          while (s.length) {
+            const cut = binaryMax(1, s.length, n => fits(full([s.slice(0, n)])))
+            chunks.push(full([s.slice(0, cut)]))
+            s = s.slice(cut)
+          }
+          i++
+        } else { chunks.push(full(b.lines.slice(i, i + take))); i += take }
+      }
+    } else {
+      let i = 0
+      while (i < b.lines.length) {
+        const take = binaryMax(1, b.lines.length - i, n => fits(b.lines.slice(i, i + n).join('\n')))
+        if (take === 1 && !fits(b.lines[i])) {
+          // single line still too tall — char-cut (one wrapped giant line)
+          let s = b.lines[i]
+          while (s.length) {
+            const cut = binaryMax(1, s.length, n => fits(s.slice(0, n)))
+            chunks.push(s.slice(0, cut))
+            s = s.slice(cut)
+          }
+          i++
+        } else { chunks.push(b.lines.slice(i, i + take).join('\n')); i += take }
+      }
+    }
+  }
+  flush()
+  return chunks.length ? chunks : [t]
+}
+
+// Minimal dependency-free PDF writer: every page embeds one JPEG (DCTDecode)
+// full-bleed, so "PDF" is a direct download instead of routing the user
+// through the print dialog. Structure-only, ASCII objects + raw JPEG bytes.
+function buildPdfFromJpegs (pages) {
+  const latin1 = s => { const u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i) & 0xff; return u }
+  const parts = []
+  let off = 0
+  const offs = {}
+  const push = p => { const u = typeof p === 'string' ? latin1(p) : p; parts.push(u); off += u.length }
+  push('%PDF-1.4\n%\u00e2\u00e3\u00cf\u00d3\n')
+  const n = pages.length
+  const obj = i => 3 + 3 * i // page / +1 image / +2 content stream
+  offs[1] = off
+  push('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n')
+  offs[2] = off
+  push('2 0 obj\n<< /Type /Pages /Kids [' + pages.map((_, i) => obj(i) + ' 0 R').join(' ') + '] /Count ' + n + ' >>\nendobj\n')
+  pages.forEach((p, i) => {
+    const wPt = Math.round(p.wPx * 0.75 * 100) / 100 // 96dpi px → pt, 1:1 crispness
+    const hPt = Math.round(p.hPx * 0.75 * 100) / 100
+    const pn = obj(i); const imn = pn + 1; const cn = pn + 2
+    offs[pn] = off
+    push(pn + ' 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + wPt + ' ' + hPt + ']' +
+      ' /Resources << /XObject << /Im' + i + ' ' + imn + ' 0 R >> >> /Contents ' + cn + ' 0 R >>\nendobj\n')
+    offs[imn] = off
+    push(imn + ' 0 obj\n<< /Type /XObject /Subtype /Image /Width ' + p.wPx + ' /Height ' + p.hPx +
+      ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + p.bytes.length + ' >>\nstream\n')
+    push(p.bytes)
+    push('\nendstream\nendobj\n')
+    const content = 'q ' + wPt + ' 0 0 ' + hPt + ' 0 0 cm /Im' + i + ' Do Q'
+    offs[cn] = off
+    push(cn + ' 0 obj\n<< /Length ' + content.length + ' >>\nstream\n' + content + '\nendstream\nendobj\n')
+  })
+  const xrefAt = off
+  let x = 'xref\n0 ' + (3 + 3 * n) + '\n0000000000 65535 f \n'
+  for (let i = 1; i < 3 + 3 * n; i++) x += String(offs[i]).padStart(10, '0') + ' 00000 n \n'
+  x += 'trailer\n<< /Size ' + (3 + 3 * n) + ' /Root 1 0 R >>\nstartxref\n' + xrefAt + '\n%%EOF'
+  push(x)
+  const out = new Uint8Array(off)
+  let at = 0
+  for (const u of parts) { out.set(u, at); at += u.length }
+  return out
+}
+
 function svgWrap (bodyHtml, width, height, css, th) {
   return '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '">' +
     '<foreignObject width="100%" height="100%">' +
@@ -487,14 +640,21 @@ function slugTitle (s) {
   return (t || 'conversation').slice(0, 48)
 }
 
-const PAGE_MAX = 7600 // CSS px per PNG page (x2 DPR stays under Chrome's 16384 cap)
+const PAGE_MAX = 7900 // CSS px per PNG page (x2 DPR = 15800, under the 16384 GPU-texture cap)
+const PAGE_HEAD = 160 // first-page headroom for the title + meta header
 
 function fragWithCss (turn, th, opt) {
   return turnXhtml(turn, { images: false, tools: opt.tools, full: opt.full }, th)
 }
 
+// Fragment-based pager. Turns are decomposed into parts (user bubble / each
+// assistant reply / tool chips); parts are measured offscreen, oversized
+// single replies are split into well-formed markdown chunks (splitLongText),
+// and everything is packed greedily under PAGE_MAX. A page is an array of
+// pre-rendered XHTML fragments. Without the splitting, one reply taller than
+// a page used to overflow the 16384 device-px canvas cap and render truncated.
 function buildPages (turns, th, opt) {
-  // Measure each turn's height offscreen, then chunk to <= PAGE_MAX.
+  const optI = { images: false, tools: opt.tools, full: opt.full }
   const holder = document.createElement('div')
   holder.className = 'chsh-wrap'
   holder.style.cssText = 'position:fixed;left:-20000px;top:0;width:' + opt.width + 'px;visibility:hidden;z-index:-1;'
@@ -503,16 +663,44 @@ function buildPages (turns, th, opt) {
   document.documentElement.appendChild(style)
   document.documentElement.appendChild(holder)
   try {
-    holder.innerHTML = '<div class="chsh-pad">' + turns.map(x => fragWithCss(x, th, opt)).join('') + '</div>'
-    const nodes = Array.from(holder.querySelectorAll('.chsh-turn'))
-    const heights = nodes.map(n => Math.ceil(n.getBoundingClientRect().height) + 22)
+    const measure = inner => {
+      holder.innerHTML = '<div class="chsh-pad"><div class="chsh-turn">' + inner + '</div></div>'
+      return Math.ceil(holder.firstChild.firstChild.getBoundingClientRect().height) + 22
+    }
+    // 1) atomic fragments
+    const raw = []
+    for (const turn of turns) {
+      if (turn.user && turn.user.text) raw.push({ kind: 'user', turn })
+      const assts = opt.full === false && turn.asst.length ? [turn.asst[turn.asst.length - 1]] : turn.asst
+      for (const a of assts) raw.push({ kind: 'asst', turn, a })
+      if (opt.tools && opt.full !== false && turn.tools.length) raw.push({ kind: 'tools', turn })
+    }
+    const partXhtml = f => f.kind === 'user' ? userXhtml(f.turn, optI)
+      : f.kind === 'asst' ? asstXhtml(f.a, optI) : toolsXhtml(f.turn)
+    // 2) split any fragment taller than a page (tool-chip rows are never split)
+    const frags = []
+    for (const f of raw) {
+      const h = measure(partXhtml(f))
+      if (h <= PAGE_MAX - 80 || f.kind === 'tools') { frags.push({ html: partXhtml(f), h }); continue }
+      const text = f.kind === 'user' ? f.turn.user.text : f.a.text
+      const ts = f.kind === 'user' ? f.turn.user.ts : f.a.ts
+      const wrap = (s, first) => {
+        const who = f.kind === 'user'
+          ? '<div class="chsh-user"><div class="chsh-who">👤' + (first && ts ? '<span class="chsh-ts">' + fmtTs(ts) + '</span>' : '') + '</div><div class="chsh-body">'
+          : '<div class="chsh-asst"><div class="chsh-who">🤖' + (first && ts ? '<span class="chsh-ts">' + fmtTs(ts) + '</span>' : '') + '</div><div class="chsh-body">'
+        return who + mdToXhtml(s, { images: false }) + '</div></div>'
+      }
+      const slices = splitLongText(text, s => measure(wrap(s, true)) <= PAGE_MAX - 120)
+      slices.forEach((s, i) => frags.push({ html: wrap(s, i === 0), h: measure(wrap(s, i === 0)) }))
+    }
+    // 3) greedy pack (first page reserves header headroom)
     const pages = []
     let cur = [], acc = 0
-    turns.forEach((turn, k) => {
-      const h = heights[k] || 200
-      if (cur.length && acc + h > PAGE_MAX) { pages.push(cur); cur = []; acc = 0 }
-      cur.push(turn); acc += h
-    })
+    for (const fr of frags) {
+      const budget = (pages.length === 0 ? PAGE_MAX - PAGE_HEAD : PAGE_MAX) - 22
+      if (cur.length && acc + fr.h > budget) { pages.push(cur); cur = []; acc = 0 }
+      cur.push(fr.html); acc += fr.h
+    }
     if (cur.length) pages.push(cur)
     return pages
   } finally {
@@ -521,19 +709,23 @@ function buildPages (turns, th, opt) {
 }
 
 function loadSvgImage (svg, width) {
+  // Blob URL, not a data URL — data URLs have practical length limits that
+  // silently truncate huge conversations; blob URLs have none.
   return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }))
     const img = new Image()
-    const to = setTimeout(() => reject(new Error('svg-render-timeout')), 15000)
-    img.onload = () => { clearTimeout(to); resolve(img) }
-    img.onerror = e => { clearTimeout(to); reject(new Error('svg-render-failed')) }
-    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)
+    const done = ok => { clearTimeout(to); URL.revokeObjectURL(url); ok ? resolve(img) : reject(new Error('svg-render-failed')) }
+    const to = setTimeout(() => done(false), 15000)
+    img.onload = () => done(true)
+    img.onerror = () => done(false)
+    img.src = url
   })
 }
 
-async function pageToPng (turns, th, opt) {
+async function pageToPng (parts, th, opt) {
   const headHtml = (opt.title ? '<div class="chsh-title">' + esc(opt.title) + '</div>' : '') +
     (opt.metaLine ? '<div class="chsh-meta">' + esc(opt.metaLine) + '</div>' : '')
-  const body = '<div class="chsh-pad">' + headHtml + turns.map(x => fragWithCss(x, th, opt)).join('') +
+  const body = '<div class="chsh-pad">' + headHtml + parts.join('') +
     '<div class="chsh-foot">Hermes · ' + esc(fmtTs(Date.now() / 1000)) + '</div></div>'
   // one measurement pass for the exact page height, then rasterize
   const holder = document.createElement('div')
@@ -558,7 +750,9 @@ async function pageToPng (turns, th, opt) {
   ctx.drawImage(img, 0, 0, opt.width, height)
   const blob = await new Promise(res => canvas.toBlob(res, 'image/png'))
   if (!blob) throw new Error('png-encode-failed')
-  return { blob, height }
+  const jpeg = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.92))
+  if (!jpeg) throw new Error('jpeg-encode-failed')
+  return { blob, jpeg, height, wDev: opt.width * dpr, hDev: height * dpr }
 }
 // -- session meta (model / thinking level / cache / speed / Hermes version) ---
 // Pure helpers: normalizeSessionInfo maps the `session.info` RPC payload,
@@ -873,9 +1067,9 @@ async function copyBlobToClipboard (blob) {
   return { via: ok ? 'selection' : null, stages }
 }
 
-// One download path for every PNG save. Multi-page exports are merged into a
-// single tall PNG when the canvas caps allow; Electron silently drops every
-// auto-download after the first, so page-by-page is only the last resort.
+// One download path for the AskModal "download image" action. Merges pages
+// when the canvas caps allow; page-by-page is the last resort (Electron
+// silently drops every auto-download after the first).
 async function saveImages (blobs) {
   const base = fileBase()
   if (blobs.length === 1) { download(blobs[0], base + '.png'); return 1 }
@@ -889,18 +1083,30 @@ async function saveImages (blobs) {
   return blobs.length
 }
 
+// Multi-page exports: merge into ONE image whenever the canvas caps allow —
+// only when even the merged image cannot exist do we involve the user.
+async function mergedOrPages (imgs) {
+  if (imgs.length === 1) return { merged: imgs[0].blob }
+  try {
+    const stitched = await stitchPngs(imgs.map(i => i.blob))
+    if (stitched) return { merged: stitched }
+  } catch (e) { /* decode failed */ }
+  return { pages: imgs.map(i => i.blob) }
+}
+
 async function doCopyPng () {
   try {
     const imgs = await renderImages()
-    if (imgs.length > 1) {
-      // Clipboard holds one image; a multi-page export cannot be copied whole.
-      // Don't decide for the user — explain and offer download vs cancel.
-      askAtom.set({ blobs: imgs.map(i => i.blob), reason: t('reasonMulti', imgs.length) })
+    const r2 = await mergedOrPages(imgs)
+    if (r2.pages) {
+      // Even the merged long image exceeds browser canvas limits. Don't
+      // silently pick a fallback — explain and let the user decide.
+      askAtom.set({ blobs: r2.pages, reason: t('reasonTooTall') })
       return
     }
-    const r = await copyBlobToClipboard(imgs[0].blob)
+    const r = await copyBlobToClipboard(r2.merged)
     if (!r.via) {
-      askAtom.set({ blobs: [imgs[0].blob], reason: t('reasonBlocked') + ' [' + r.stages.join(' → ') + ']' })
+      askAtom.set({ blobs: [r2.merged], reason: t('reasonBlocked') + ' [' + r.stages.join(' → ') + ']' })
       return
     }
     haptic('success')
@@ -953,9 +1159,16 @@ function AskModal () {
 async function doDownloadPng () {
   try {
     const imgs = await renderImages()
-    const n = await saveImages(imgs.map(i => i.blob))
+    const r2 = await mergedOrPages(imgs)
+    if (r2.pages) {
+      // Over canvas caps even after merging — never silently dump paginated
+      // files; the modal's download action paginates, cancel suggests formats.
+      askAtom.set({ blobs: r2.pages, reason: t('reasonTooTall') })
+      return
+    }
+    download(r2.merged, fileBase() + '.png')
     haptic('success')
-    host.notify({ kind: 'success', message: n > 1 ? t('savedN', n) : t('saved') })
+    host.notify({ kind: 'success', message: t('saved') })
   } catch (err) { fail(err) }
 }
 
@@ -995,62 +1208,21 @@ function exportMd () {
 
 function doDownloadHtml () { try { download(exportHtml(), fileBase() + '.html'); host.notify({ kind: 'success', message: t('saved') }) } catch (err) { fail(err) } }
 
-// PDF export — zero-dependency print route. Builds a print-tuned HTML doc
-// (light palette, @page margins, per-turn page-break protection), opens it in
-// a blank window and hands the job to the system print dialog ("Save as PDF").
-// window.open can be blocked by Electron policy → fall back to a hidden
-// iframe; if that fails too, tell the user to print the exported HTML file.
-function exportPrintableHtml () {
-  const th = fixedThemePalette('light')
-  const opt = { ...optAtom.get(), images: true }
-  const ids = new Set(selectedIds())
-  const turns = turnsAtom.get().filter(x => ids.has(x.id))
-  const ml = opt.meta === false ? '' : buildMetaLine(metaAtom.get())
-  const body = '<div class="chsh-wrap"><div class="chsh-pad">' +
-    '<div class="chsh-title">' + esc(stateAtom.get().title || t('shareTitle')) + '</div>' +
-    '<div class="chsh-meta">' + esc(fmtTs(Date.now() / 1000)) + ' · ' + turns.length + ' ' + t('turnsN') + (ml ? ' · ' + esc(ml) : '') + '</div>' +
-    turns.map(x => turnXhtml(x, { images: true, tools: opt.tools, full: opt.full }, th)).join('') +
-    '<div class="chsh-foot">Hermes</div></div></div>'
-  return '<!DOCTYPE html><html><head><meta charset="utf-8"/><title>' + esc(stateAtom.get().title || 'Hermes') +
-    '</title><style>@page{margin:18mm;}body{margin:0;background:' + th.bg + ';}' +
-    exportCss(th, opt) +
-    '.chsh-wrap img{max-width:100%;}.chsh-wrap .chsh-body{min-width:0;}' +
-    '.chsh-body pre{white-space:pre-wrap;}</style></head><body>' + body + '</body></html>'
-}
-
-function printHtmlDocument (html) {
-  // Returns true when the print dialog was triggered.
-  let win = null
-  try { win = window.open('', '_blank') } catch (e) { /* popup blocked */ }
-  if (win && win.document) {
-    win.document.open(); win.document.write(html); win.document.close()
-    const w = win
-    setTimeout(() => { try { w.focus(); w.print() } catch (e) { /* user prints manually */ } }, 250)
-    return true
-  }
+// PDF export — direct download, zero dependencies. The already-paginated PNG
+// pages are re-encoded as JPEG and embedded into a hand-built PDF (DCTDecode,
+// one full-bleed image per page) via buildPdfFromJpegs. No print dialog.
+async function doDownloadPdf () {
   try {
-    const iframe = document.createElement('iframe')
-    iframe.style.cssText = 'position:fixed;left:-99999px;top:0;width:0;height:0;border:0;'
-    document.body.appendChild(iframe)
-    const doc = iframe.contentDocument
-    doc.open(); doc.write(html); doc.close()
-    const done = () => setTimeout(() => iframe.remove(), 4000)
-    iframe.onload = done
-    setTimeout(() => { try { iframe.contentWindow.focus(); iframe.contentWindow.print() } catch (e) { /* last resort below */ } done() }, 250)
-    return true
-  } catch (e) { return false }
-}
-
-function doDownloadPdf () {
-  try {
-    const html = exportPrintableHtml()
-    if (!printHtmlDocument(html)) {
-      // Both routes blocked — save the print-ready file and tell the user.
-      download(new Blob([html], { type: 'text/html;charset=utf-8' }), fileBase() + '-print.html')
-      host.notify({ kind: 'info', message: t('pdfFallback') })
-      return
+    const imgs = await renderImages()
+    const pages = []
+    for (const im of imgs) {
+      const buf = await im.jpeg.arrayBuffer()
+      pages.push({ bytes: new Uint8Array(buf), wPx: im.wDev, hPx: im.hDev })
     }
-    host.notify({ kind: 'info', message: t('pdfHint') })
+    const pdf = buildPdfFromJpegs(pages)
+    download(new Blob([pdf], { type: 'application/pdf' }), fileBase() + '.pdf')
+    haptic('success')
+    host.notify({ kind: 'success', message: t('saved') })
   } catch (err) { fail(err) }
 }
 function doDownloadMd () { try { download(exportMd(), fileBase() + '.md'); host.notify({ kind: 'success', message: t('saved') }) } catch (err) { fail(err) } }
@@ -1204,83 +1376,93 @@ function Toolbar () {
   return jsxs('div', {
     className: 'border-b border-(--border) sticky top-0 bg-(--background) z-10 flex flex-col gap-1.5 px-4 py-2',
     children: [
-      jsxs('div', { className: 'flex items-center gap-2 flex-nowrap', children: [
-        jsx('span', { className: 'text-sm text-(--muted-foreground) shrink-0', style: { width: 130 }, children: t('selCount', selected.length, turns.length) }),
-    jsx(Button, { size: 'xs', variant: 'text', onClick: () => setSel(null), children: t('selectAll') }),
-    jsx(Button, { size: 'xs', variant: 'text', onClick: () => setSel([]), children: t('clearSel') }),
-    jsx(Button, { size: 'xs', variant: 'text', onClick: () => setSel(turns.filter(x => !sel || !sel.has(x.id)).map(x => x.id)), children: t('invertSel') }),
-      jsx('input', {
-        className: 'text-xs rounded-md border border-(--border) bg-transparent px-2 py-1 text-(--foreground) shrink-0',
-        style: { width: 220 }, placeholder: t('searchPh'), value: q,
-        onChange: e => setQ(e.target.value),
-        onKeyDown: e => { if (e.key === 'Enter') { e.preventDefault(); step(e.shiftKey ? -1 : 1) } }
-      }),
-      jsx('span', { className: 'text-xs text-(--muted-foreground) shrink-0 text-center', style: { width: 46 }, children: q.trim() ? (nav.at + 1) + '/' + nav.ids.length : '' }),
-      jsx(Button, { size: 'xs', variant: 'text', onClick: () => step(-1), children: '↑' }),
-      jsx(Button, { size: 'xs', variant: 'text', onClick: () => step(1), children: '↓' }),
+      // Row 1: selection + search. flex-wrap so narrow windows flow instead of
+      // clipping the right edge; every label is nowrap so CJK text never
+      // stacks one character per line.
+      jsxs('div', { className: 'flex items-center gap-x-2 gap-y-1 flex-wrap min-w-0', children: [
+        jsx('span', { className: 'text-sm text-(--muted-foreground) whitespace-nowrap', children: t('selCount', selected.length, turns.length) }),
+        jsx(Button, { size: 'xs', variant: 'text', onClick: () => setSel(null), children: t('selectAll') }),
+        jsx(Button, { size: 'xs', variant: 'text', onClick: () => setSel([]), children: t('clearSel') }),
+        jsx(Button, { size: 'xs', variant: 'text', onClick: () => setSel(turns.filter(x => !sel || !sel.has(x.id)).map(x => x.id)), children: t('invertSel') }),
+        jsx('span', { className: 'w-2 shrink-0' }),
+        jsx('input', {
+          className: 'text-xs rounded-md border border-(--border) bg-transparent px-2 py-1 text-(--foreground) min-w-[160px]',
+          style: { width: 'min(240px, 40vw)' }, placeholder: t('searchPh'), value: q,
+          onChange: e => setQ(e.target.value),
+          onKeyDown: e => { if (e.key === 'Enter') { e.preventDefault(); step(e.shiftKey ? -1 : 1) } }
+        }),
+        jsx('span', { className: 'text-xs text-(--muted-foreground) shrink-0 text-center whitespace-nowrap', style: { width: 46 }, children: q.trim() ? (nav.at + 1) + '/' + nav.ids.length : '' }),
+        jsx(Button, { size: 'xs', variant: 'text', onClick: () => step(-1), children: '↑' }),
+        jsx(Button, { size: 'xs', variant: 'text', onClick: () => step(1), children: '↓' })
       ] }),
-      jsxs('div', { className: 'flex items-center gap-2 flex-nowrap', children: [
-        jsx('span', { className: 'text-xs text-(--muted-foreground) shrink-0', children: t('widthL') }),
-    jsx('select', {
-      className: 'text-xs rounded-md border border-(--border) bg-transparent px-1.5 py-1 text-(--foreground) shrink-0',
-      style: { width: 100 },
-      value: String(opt.width), onChange: e => setOpt({ width: Number(e.target.value) }),
-      children: [680, 880, 1080].map(w => jsx('option', { value: String(w), children: t('widthN', w) }, w))
-    }),
-    jsx('span', { className: 'text-xs text-(--muted-foreground) shrink-0 ml-1', children: t('fontL') }),
-    jsx('select', {
-      className: 'text-xs rounded-md border border-(--border) bg-transparent px-1.5 py-1 text-(--foreground) shrink-0',
-      style: { width: 96 },
-      value: String(opt.scale), onChange: e => setOpt({ scale: Number(e.target.value) }),
-      children: [0.85, 1, 1.2].map(s => jsx('option', { value: String(s), children: t('fontN', Math.round(15 * s)) }, s))
-    }),
-    jsx('span', { className: 'text-xs text-(--muted-foreground) shrink-0 ml-1', children: t('themeL') }),
-    jsx('select', {
-      className: 'text-xs rounded-md border border-(--border) bg-transparent px-1.5 py-1 text-(--foreground) shrink-0',
-      style: { width: 92 },
-      value: opt.theme || 'auto', onChange: e => setOpt({ theme: e.target.value }),
-      children: ['auto', 'light', 'dark'].map(m => jsx('option', { value: m, children: t('themeM', m) }, m))
-    }),
-    jsx('label', {
-      className: 'flex items-center gap-1.5 text-xs text-(--foreground) cursor-pointer select-none',
-      children: [
-        jsx('input', {
-          type: 'checkbox', checked: opt.meta !== false,
-          onChange: () => setOpt({ meta: opt.meta === false }),
-          className: 'size-3.5 accent-(--accent)'
-        }),
-        t('toggleMeta')
-      ]
-    }, 'meta'),
-    jsx('label', {
-      className: 'flex items-center gap-1.5 text-xs text-(--foreground) cursor-pointer select-none',
-      children: [
-        jsx('input', {
-          type: 'checkbox', checked: !!opt.tools,
-          onChange: () => setOpt({ tools: !opt.tools }),
-          className: 'size-3.5 accent-(--accent)'
-        }),
-        t('toggleTools')
-      ]
-    }, 'tools'),
-    jsx('label', {
-      className: 'flex items-center gap-1.5 text-xs text-(--foreground) cursor-pointer select-none',
-      children: [
-        jsx('input', {
-          type: 'checkbox', checked: opt.full !== false,
-          onChange: () => setOpt({ full: !opt.full }),
-          className: 'size-3.5 accent-(--accent)'
-        }),
-        t('fullLabel')
-      ]
-    }, 'full'),
-    jsx('span', { className: 'flex-1' }),
-    jsx(Button, { size: 'sm', onClick: () => void doDownloadMd(), children: 'Markdown' }),
-    jsx(Button, { size: 'sm', onClick: () => void doDownloadJson(), children: 'JSON' }),
-    jsx(Button, { size: 'sm', onClick: () => void doDownloadHtml(), children: 'HTML' }),
-    jsx(Button, { size: 'sm', onClick: () => void doDownloadPdf(), children: t('btnPdf') }),
-    jsx(Button, { size: 'sm', onClick: () => void doDownloadPng(), children: t('btnPng') }),
-    jsx(Button, { size: 'sm', onClick: () => void doCopyPng(), children: t('btnCopyPng') })
+      // Row 2: display options — same wrap behavior.
+      jsxs('div', { className: 'flex items-center gap-x-3 gap-y-1 flex-wrap', children: [
+        jsxs('span', { className: 'flex items-center gap-1.5', children: [
+          jsx('span', { className: 'text-xs text-(--muted-foreground) whitespace-nowrap', children: t('widthL') }),
+          jsx('select', {
+            className: 'text-xs rounded-md border border-(--border) bg-transparent px-1.5 py-1 text-(--foreground)',
+            value: String(opt.width), onChange: e => setOpt({ width: Number(e.target.value) }),
+            children: [680, 880, 1080].map(w => jsx('option', { value: String(w), children: t('widthN', w) }, w))
+          })
+        ] }),
+        jsxs('span', { className: 'flex items-center gap-1.5', children: [
+          jsx('span', { className: 'text-xs text-(--muted-foreground) whitespace-nowrap', children: t('fontL') }),
+          jsx('select', {
+            className: 'text-xs rounded-md border border-(--border) bg-transparent px-1.5 py-1 text-(--foreground)',
+            value: String(opt.scale), onChange: e => setOpt({ scale: Number(e.target.value) }),
+            children: [0.85, 1, 1.2].map(s => jsx('option', { value: String(s), children: t('fontN', Math.round(15 * s)) }, s))
+          })
+        ] }),
+        jsxs('span', { className: 'flex items-center gap-1.5', children: [
+          jsx('span', { className: 'text-xs text-(--muted-foreground) whitespace-nowrap', children: t('themeL') }),
+          jsx('select', {
+            className: 'text-xs rounded-md border border-(--border) bg-transparent px-1.5 py-1 text-(--foreground)',
+            value: opt.theme || 'auto', onChange: e => setOpt({ theme: e.target.value }),
+            children: ['auto', 'light', 'dark'].map(m => jsx('option', { value: m, children: t('themeM', m) }, m))
+          })
+        ] }),
+        jsx('label', {
+          className: 'flex items-center gap-1.5 text-xs text-(--foreground) cursor-pointer select-none whitespace-nowrap',
+          children: [
+            jsx('input', {
+              type: 'checkbox', checked: opt.meta !== false,
+              onChange: () => setOpt({ meta: opt.meta === false }),
+              className: 'size-3.5 accent-(--accent)'
+            }),
+            t('toggleMeta')
+          ]
+        }, 'meta'),
+        jsx('label', {
+          className: 'flex items-center gap-1.5 text-xs text-(--foreground) cursor-pointer select-none whitespace-nowrap',
+          children: [
+            jsx('input', {
+              type: 'checkbox', checked: !!opt.tools,
+              onChange: () => setOpt({ tools: !opt.tools }),
+              className: 'size-3.5 accent-(--accent)'
+            }),
+            t('toggleTools')
+          ]
+        }, 'tools'),
+        jsx('label', {
+          className: 'flex items-center gap-1.5 text-xs text-(--foreground) cursor-pointer select-none whitespace-nowrap',
+          children: [
+            jsx('input', {
+              type: 'checkbox', checked: opt.full !== false,
+              onChange: () => setOpt({ full: !opt.full }),
+              className: 'size-3.5 accent-(--accent)'
+            }),
+            t('fullLabel')
+          ]
+        }, 'full')
+      ] }),
+      // Row 3: export actions, right-aligned, wraps as a group.
+      jsxs('div', { className: 'flex items-center gap-2 flex-wrap justify-end', children: [
+        jsx(Button, { size: 'sm', onClick: () => void doDownloadMd(), children: 'Markdown' }),
+        jsx(Button, { size: 'sm', onClick: () => void doDownloadJson(), children: 'JSON' }),
+        jsx(Button, { size: 'sm', onClick: () => void doDownloadHtml(), children: 'HTML' }),
+        jsx(Button, { size: 'sm', onClick: () => void doDownloadPdf(), children: t('btnPdf') }),
+        jsx(Button, { size: 'sm', onClick: () => void doDownloadPng(), children: t('btnPng') }),
+        jsx(Button, { size: 'sm', onClick: () => void doCopyPng(), children: t('btnCopyPng') })
       ] }),
       (opt.meta !== false && ml) ? jsx('div', { className: 'text-xs text-(--muted-foreground)', children: ml }, 'meta') : null
     ]
@@ -1413,10 +1595,10 @@ const STRINGS = {
     toggleTools: 'tool calls',
     btnPng: 'Download PNG', btnCopyPng: 'Copy image',
     copied: 'Long image copied to clipboard',
-    askTitle: 'Cannot copy to clipboard',
-    reasonMulti: n => 'This conversation exports as ' + n + ' tall pages, and the clipboard can only hold one image. Downloading gives you one merged long PNG.',
+    askTitle: 'Cannot finish this export',
+    reasonTooTall: 'This conversation is too tall for a single image even after merging (browser canvas limits). You can download it as paginated PNGs — or cancel and use HTML / Markdown / PDF for the full content in one file.',
     reasonBlocked: 'The desktop app blocks plugin clipboard writes (security policy).',
-    btnCancel: 'Cancel', btnDownload: 'Download image',
+    btnCancel: 'Cancel', btnDownload: 'Download paginated PNGs',
     saved: 'Saved', savedN: n => n + ' files downloaded (too tall to merge into one PNG)', exportFailed: 'Export failed',
     turnsN: 'turns',
     searchPh: 'search turns…',
@@ -1426,9 +1608,7 @@ const STRINGS = {
     fullLabel: 'share full conversation',
     themeL: 'Theme', themeM: m => m === 'auto' ? 'follow app' : (m === 'light' ? 'light' : 'dark'),
     toggleMeta: 'session info',
-    btnPdf: 'PDF / Print',
-    pdfHint: 'Print dialog opened — choose "Save as PDF".',
-    pdfFallback: 'Print was blocked; a print-ready HTML file was downloaded instead — open it and print to PDF.',
+    btnPdf: 'PDF',
     rangeTip: n => 'selected turns ' + n,
     rangeClear: 'clear',
     editTitleTip: 'Click to edit the export title'
@@ -1448,10 +1628,10 @@ const STRINGS = {
     toggleTools: '工具调用',
     btnPng: '下载长图', btnCopyPng: '复制图片',
     copied: '长截图已复制到剪贴板',
-    askTitle: '无法复制到粘贴板',
-    reasonMulti: n => '本次内容会导出为 ' + n + ' 页长图，粘贴板一次只能放一张图片；下载则会合并为一张长 PNG。',
+    askTitle: '无法完成这次导出',
+    reasonTooTall: '这个对话即使拼接后也超出了浏览器画布上限，无法生成单张长图。可以下载为分页 PNG；或取消后改用 HTML / Markdown / PDF，把完整内容放进单个文件。',
     reasonBlocked: '桌面端权限策略阻止了插件写入剪贴板。',
-    btnCancel: '取消', btnDownload: '下载图片',
+    btnCancel: '取消', btnDownload: '下载分页 PNG',
     saved: '已保存', savedN: n => '已下载 ' + n + ' 个文件（长图过高，无法合并为一张）', exportFailed: '导出失败',
     turnsN: '轮',
     searchPh: '搜索对话内容…',
@@ -1461,9 +1641,7 @@ const STRINGS = {
     fullLabel: '分享完整对话',
     themeL: '主题', themeM: m => m === 'auto' ? '跟随应用' : (m === 'light' ? '浅色' : '深色'),
     toggleMeta: '会话信息',
-    btnPdf: 'PDF / 打印',
-    pdfHint: '已打开打印对话框 — 选择「另存为 PDF」。',
-    pdfFallback: '打印被阻止；已改为下载打印友好 HTML 文件，打开后打印为 PDF 即可。',
+    btnPdf: 'PDF',
     rangeTip: n => '已选第 ' + n + ' 轮',
     rangeClear: '清除',
     editTitleTip: '点击编辑导出标题'
