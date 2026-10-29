@@ -12,7 +12,7 @@ import { useEffect, useState } from 'react'
 const PLUGIN_ID = 'hermes-chat-share'
 // Keep in sync with plugin.yaml. Rendered as a tiny badge in the page header
 // so "did my update actually load?" is always answerable at a glance.
-const PLUGIN_VERSION = '1.1.7'
+const PLUGIN_VERSION = '1.1.8'
 const ROUTE = '/chat-share'
 
 // ==== CORE START ==== (dependency-free export core; mirrored by the test harness)
@@ -1007,6 +1007,31 @@ function groupTurns (messages) {
   return turns.filter(x => x.user || x.asst.length)
 }
 
+// -- session meta acquisition --------------------------------------------------
+// `session.info` is a gateway EVENT (not requestable): the gateway emits it on
+// session create/resume/activate/turn-end. We cache every event's payload per
+// stored_session_id and merge it with the requestable `session.usage` RPC.
+const sessionInfoCache = new Map() // stored_session_id -> normalized meta
+let liveInfoWait = null // session id awaiting a fresh session.info event
+
+function onSessionInfoEvent (event) {
+  try {
+    const p = (event && (event.payload || event)) || {}
+    const key = String(p.stored_session_id || p.session_id || '').trim()
+    const info = normalizeSessionInfo(p)
+    if (!info) return
+    if (key) sessionInfoCache.set(key, info)
+    // Update the live view if we're waiting on (or already showing) this session.
+    const st = stateAtom.get()
+    const focused = host.state.focusedStoredSessionId.get() || host.state.activeSessionId.get() || ''
+    const match = (key && (key === focused || key === liveInfoWait)) || (!key && liveInfoWait === focused)
+    if (match) {
+      metaAtom.set(info)
+      liveInfoWait = null
+    }
+  } catch (e) { /* event tap must never throw into the host dispatch */ }
+}
+
 async function fetchTurnsFor (sid) {
   if (!sid) return
   const st = stateAtom.get()
@@ -1023,18 +1048,47 @@ async function fetchTurnsFor (sid) {
     if (!res) throw lastErr || new Error('session.history unavailable')
     const messages = (res && res.messages) || []
     turnsAtom.set(groupTurns(messages))
-    let meta = null
+    // Meta comes from two real surfaces (session.info is an EVENT, not a
+    // requestable RPC — requesting it throws -32601):
+    //   1. `session.usage` RPC → tokens, cache_hit_pct, avg_tps, usage.model
+    //   2. the `session.info` event stream (subscribed in register()) →
+    //      model/provider/effort/version, cached per session id as it arrives.
+    // Merge both; fields the gateway omits stay omitted — never faked.
+    const realSid = tried[tried.length - 1] || sid
+    let meta = sessionInfoCache.get(realSid) || sessionInfoCache.get(sid) || null
     try {
-      meta = normalizeSessionInfo(await host.request('session.info', { session_id: tried[tried.length - 1] }, 30000))
-    } catch (e) { /* archived / compute-host sessions may have no live info — meta line just shrinks */ }
+      const usage = await host.request('session.usage', { session_id: realSid }, 30000)
+      if (usage && typeof usage === 'object') {
+        // meta is already normalized — merge normalized-on-normalized directly
+        // (re-running normalizeSessionInfo would drop .effort/.provider, which
+        // it reads only from raw reasoning_effort_* keys).
+        const u = normalizeSessionInfo({ usage })
+        const pick = (a, b) => (a != null && a !== '') ? a : ((b != null && b !== '') ? b : null)
+        meta = {
+          model: pick(meta && meta.model, usage.model),
+          provider: (meta && meta.provider) || '',
+          effort: (meta && meta.effort) || '',
+          cacheHitPct: pick(u.cacheHitPct, meta && meta.cacheHitPct),
+          avgTps: pick(u.avgTps, meta && meta.avgTps),
+          totalTokens: pick(u.totalTokens, meta && meta.totalTokens),
+          version: (meta && meta.version) || '',
+          releaseDate: (meta && meta.releaseDate) || ''
+        }
+        if (!meta.model && !meta.version && meta.cacheHitPct == null && meta.avgTps == null && !meta.totalTokens) meta = null
+      }
+    } catch (e) { /* archived / compute-host sessions may have no live usage — meta line just shrinks */ }
     metaAtom.set(meta)
     let title = ''
     try {
       const list = await host.request('session.list', { limit: 200 })
       const rows = (list && (list.sessions || list.rows || list.list)) || []
-      const hit = rows.find(r => r.session_id === sid || r.id === sid)
+      const hit = rows.find(r => r.session_id === sid || r.id === sid || r.resolved_id === sid)
       if (hit) title = hit.title || hit.name || ''
     } catch (e) { /* title is cosmetic */ }
+    // Kick a live meta fetch for this session if the event cache has nothing:
+    // the gateway re-emits session.info on activity, and the subscription
+    // below updates metaAtom when it lands.
+    if (!sessionInfoCache.get(realSid) && !sessionInfoCache.get(sid)) liveInfoWait = realSid
     selAtom.set(null)
     expAtom.set(new Set()); qAtom.set(''); navAtom.set({ ids: [], at: -1 }); activeAtom.set(null); rowEls.clear()
     stateAtom.set({ loading: false, error: '', sid, title, total: messages.length })
@@ -1737,6 +1791,9 @@ export default {
   register (ctx) {
     ctxI18nRef = ctx.i18n
     ctx.i18n.register(STRINGS)
+    // session.info is event-only — subscribe through the plugin event tap so
+    // the meta line has a live data source (see onSessionInfoEvent).
+    if (ctx.onEvent) ctx.onEvent('session.info', onSessionInfoEvent)
     const contribute = () => ctx.registerMany([
       { id: 'page', area: ROUTES_AREA, data: { path: ROUTE }, render: () => jsx(SharePage, {}) },
       { id: 'nav', area: SIDEBAR_NAV_AREA, data: { path: ROUTE, label: ctx.i18n.t('navLabel'), codicon: 'share' } },
