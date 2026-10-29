@@ -10,7 +10,7 @@
 
 ## 安装
 
-> ✅ 已正式收录进 **Hermes Agent 官方插件目录**（community 层级）——经 [NousResearch/hermes-agent#144552](https://github.com/NousResearch/hermes-agent/pull/144552) 合并，官方文档页：[hermes-agent.nousresearch.com/docs/plugins/hermes-chat-share](https://hermes-agent.nousresearch.com/docs/plugins/hermes-chat-share)。
+> ✅ 已正式收录进 **Hermes Agent 官方插件目录**（community 层级）——经 [NousResearch/hermes-agent#144552](https://github.com/NousResearch/hermes-agent/pull/144552) 合并，v1.1.8 更新经 [#146455](https://github.com/NousResearch/hermes-agent/pull/146455) 提交，官方文档页：[hermes-agent.nousresearch.com/docs/plugins/hermes-chat-share](https://hermes-agent.nousresearch.com/docs/plugins/hermes-chat-share)。
 
 **方式一：桌面插件市场（推荐）**
 
@@ -47,7 +47,7 @@ smallmj/hermes-chat-share
 - **逐轮折叠**：每轮默认只显示你的问题和最终回复，「展开（N 条中间回复 · M 个工具调用）」按需展开，各轮独立。
 - **分享范围开关**：取消勾选「分享完整对话」后，**所有导出**都只含问题+最终回复——所见即所得。
 
-**诚实的会话元数据**——模型与提供方、思考等级、缓存命中率、输出速度 tok/s、总 tokens、Hermes 版本，进入页面头部和每种导出；取自网关的规范 `session.info`，缺字段就省略，绝不编造。不想暴露模型信息？**「会话信息」开关一键隐藏**，导出标题也可**点击即改**。
+**诚实的会话元数据**——模型与提供方、思考等级、缓存命中率、输出速度 tok/s、总 tokens、Hermes 版本，进入页面头部和每种导出；取自网关的真实数据面——`session.usage` RPC 与 `session.info` 网关事件，缺字段就省略，绝不编造。不想暴露模型信息？**「会话信息」开关一键隐藏**，导出标题也可**点击即改**。
 
 **导出**
 - **PNG 长图**：宽 680/880/1080px、字号三档、2× 高清，配色实时快照当前 App 主题（深浅色都对）。**单条超长回复自动跨页拆分**，几千行的日志刷屏也不会悄悄截断；多页下载会**自动拼回一张长 PNG**，浏览器"一页只许下载一次"的限制吃不掉后面的页。
@@ -73,7 +73,7 @@ smallmj/hermes-chat-share
 ```bash
 node --check desktop/plugin.js   # 语法
 ./dev-tests/stub-runner.sh       # SDK 注册冒烟测试 → STUB_OK
-node dev-tests/meta.test.mjs     # 元数据/颜色/导出范围/主题/JSON/区间选择/高亮 单测
+node dev-tests/meta.test.mjs     # 12 组单测：meta/颜色/范围/主题/JSON/区间/高亮/esc/行内码/拆分/PDF
 ```
 
 Git 安装要求仓库根下 `desktop/plugin.js` 布局——见插件 SDK 文档。
