@@ -10,6 +10,9 @@ import { jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useState } from 'react'
 
 const PLUGIN_ID = 'hermes-chat-share'
+// Keep in sync with plugin.yaml. Rendered as a tiny badge in the page header
+// so "did my update actually load?" is always answerable at a glance.
+const PLUGIN_VERSION = '1.1.5'
 const ROUTE = '/chat-share'
 
 // ==== CORE START ==== (dependency-free export core; mirrored by the test harness)
@@ -1563,7 +1566,11 @@ function TitleHeader ({ t, st }) {
         }),
     st.sid ? jsx('span', { className: 'text-xs text-(--muted-foreground)', children: st.sid.slice(0, 8) + '…' }) : null,
     jsx('span', { className: 'flex-1' }),
-    st.loading ? jsx(GlyphSpinner, { className: 'text-(--muted-foreground)' }) : null
+    st.loading ? jsx(GlyphSpinner, { className: 'text-(--muted-foreground)' }) : null,
+    // Build sentinel: proves which code the running process actually loaded.
+    // If this doesn't read PLUGIN_VERSION after an update, the host kept the
+    // old ESM module cached — fully quit and relaunch the desktop app.
+    jsx('span', { className: 'text-[10px] text-(--muted-foreground) opacity-60 shrink-0', title: t('verTip'), children: 'v' + PLUGIN_VERSION })
   ] })
 }
 
@@ -1674,7 +1681,8 @@ const STRINGS = {
     btnPdf: 'PDF',
     rangeTip: n => 'selected turns ' + n,
     rangeClear: 'clear',
-    editTitleTip: 'Click to edit the export title'
+    editTitleTip: 'Click to edit the export title',
+    verTip: 'Plugin build version — if this is stale after an update, fully quit and relaunch the desktop app'
   },
   'zh': {
     navLabel: '分享对话',
@@ -1707,7 +1715,8 @@ const STRINGS = {
     btnPdf: 'PDF',
     rangeTip: n => '已选第 ' + n + ' 轮',
     rangeClear: '清除',
-    editTitleTip: '点击编辑导出标题'
+    editTitleTip: '点击编辑导出标题',
+    verTip: '插件构建版本 — 更新后如果这里仍是旧号，请完全退出并重启桌面 App'
   }
 }
 
