@@ -694,16 +694,17 @@ function buildPages (turns, th, opt) {
 }
 
 function loadSvgImage (svg, width) {
-  // Blob URL, not a data URL — data URLs have practical length limits that
-  // silently truncate huge conversations; blob URLs have none.
+  // MUST be a data: URL, not blob:. Chromium taints the canvas when the drawn
+  // image is an SVG (with foreignObject) loaded from a blob: URL — toBlob then
+  // throws "Tainted canvases may not be exported". Data URLs keep the image
+  // origin-clean. Pages are capped at PAGE_MAX CSS px, so the percent-encoded
+  // URL stays far below any practical data-URL limit.
   return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }))
     const img = new Image()
-    const done = ok => { clearTimeout(to); URL.revokeObjectURL(url); ok ? resolve(img) : reject(new Error('svg-render-failed')) }
-    const to = setTimeout(() => done(false), 15000)
-    img.onload = () => done(true)
-    img.onerror = () => done(false)
-    img.src = url
+    const to = setTimeout(() => reject(new Error('svg-render-timeout')), 15000)
+    img.onload = () => { clearTimeout(to); resolve(img) }
+    img.onerror = () => { clearTimeout(to); reject(new Error('svg-render-failed')) }
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)
   })
 }
 
@@ -733,6 +734,9 @@ async function pageToPng (parts, th, opt) {
   ctx.fillStyle = th.bg
   ctx.fillRect(0, 0, opt.width, height)
   ctx.drawImage(img, 0, 0, opt.width, height)
+  // Taint probe: toBlob on a tainted canvas throws a bare SecurityError;
+  // name the actual cause (a non-origin-clean SVG source) instead.
+  try { ctx.getImageData(0, 0, 1, 1) } catch (e) { throw new Error('canvas-tainted-svg-source') }
   const blob = await new Promise(res => canvas.toBlob(res, 'image/png'))
   if (!blob) throw new Error('png-encode-failed')
   const jpeg = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.92))
