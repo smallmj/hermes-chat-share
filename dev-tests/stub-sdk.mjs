@@ -26,3 +26,7 @@ export const GlyphSpinner = 'span'
 export const MessageTextContent = 'div'
 export const Codicon = 'i'
 export const usePluginI18n = () => key => key
+// Event tap (mirrors @/contrib/events): plugins subscribe via ctx.onEvent.
+const eventListeners = new Map()
+export const __emitGatewayEvent = (type, event) => { for (const f of eventListeners.get(type) ?? []) f(event) }
+export const __eventListeners = eventListeners
