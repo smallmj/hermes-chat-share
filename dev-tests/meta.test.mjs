@@ -18,6 +18,33 @@ assert.equal(buildMetaLine(normalizeSessionInfo({ model: 'x', reasoning_effort: 
 
 console.log('META_TEST_OK')
 
+// --- exportCss must return a joined STRING stylesheet ---
+// Regression (v1.1.0–v1.1.5): exportCss returned the bare rules array, so
+// call-site string concat comma-joined it and invalidated most of the CSS —
+// exports rendered near-unstyled (small titles, no bubbles/zebra/headers).
+const { exportCss: ec, fixedThemePalette: ftp } = await import('./core.mjs')
+const sheet = ec(ftp('light'), { width: 880, scale: 1 })
+assert.equal(typeof sheet, 'string', 'exportCss returns a string, not an array')
+assert.ok(sheet.startsWith('.chsh-wrap{'), 'sheet opens with the wrap rule')
+// the wrap rule is split across two array items — the join must fuse them
+assert.ok(sheet.includes('sans-serif;font-size:'), 'split rule fused at the join seam')
+// no rule may start with a comma (that is the array-join corruption shape)
+for (const seg of sheet.split('}')) {
+  const r = seg.trim()
+  if (r) assert.ok(!r.startsWith(','), 'no comma-corrupted segment: ' + r.slice(0, 40))
+}
+// key rules survive intact
+assert.ok(sheet.includes('.chsh-title{font-size:30px;font-weight:700'), 'title rule intact')
+assert.ok(sheet.includes('.chsh-who{'), 'turn-header rule present')
+assert.ok(sheet.includes('.chsh-user .chsh-body{'), 'user-bubble rule present')
+assert.ok(sheet.includes('nth-child(even)'), 'zebra rule present')
+assert.ok(sheet.includes('.tok-kw{'), 'syntax-token rules present (fixed palette)')
+// dark palette + scale variant
+const dark = ec(ftp('dark'), { width: 680, scale: 1.2 })
+assert.equal(typeof dark, 'string')
+assert.ok(dark.includes('font-size:18px'), 'scale factor applied (15*1.2)')
+console.log('CSS_TEST_OK')
+
 // --- color solidification (dialog readability on vibrancy themes) ---
 const { parseCssRgba, solidColor, isDarkColor } = await import('./core.mjs')
 assert.deepEqual(parseCssRgba('#abc'), { r: 170, g: 187, b: 204, a: 1 })

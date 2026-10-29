@@ -1,5 +1,5 @@
 name: hermes-chat-share
-version: "1.1.5"
+version: "1.1.6"
 description: "Share Hermes Desktop conversations as long PNG screenshots, self-contained HTML, Markdown, JSON, or PDF — per-turn selection with gutter drag range-select, search, collapsing and share-scope control; light/dark theme override with syntax-highlighted code; remembered export preferences; oversize-proof paging for huge replies; honest session metadata; policy-safe clipboard copy. The Hermes Desktop counterpart of dsh-share."
 author: "smallmj"
 homepage: "https://github.com/smallmj/hermes-chat-share"
