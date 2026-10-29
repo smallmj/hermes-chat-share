@@ -206,7 +206,7 @@ function exportCss (th, opt) {
     'font-size:' + fs + 'px;line-height:1.6;color:' + th.fg + ';background:' + th.bg + ';word-break:break-word;}',
     '.chsh-wrap *{box-sizing:border-box;margin:0;padding:0;}',
     '.chsh-pad{padding:28px 26px;}',
-    '.chsh-title{font-size:' + (fs * 1.25) + 'px;font-weight:600;margin-bottom:4px;}',
+    '.chsh-title{font-size:' + (fs * 1.7) + 'px;font-weight:700;line-height:1.3;margin-bottom:8px;}',
     '.chsh-meta{font-size:' + (fs * 0.75) + 'px;color:' + th.muted + ';margin-bottom:22px;}',
     '.chsh-turn{margin:0 0 22px;page-break-inside:avoid;}',
     '.chsh-who{font-size:' + (fs * 0.8) + 'px;font-weight:600;color:' + th.muted + ';margin:0 0 6px;display:flex;}',
@@ -1425,15 +1425,16 @@ function Toolbar () {
   return jsxs('div', {
     className: 'border-b border-(--border) sticky top-0 bg-(--background) z-10 flex flex-col gap-1.5 px-4 py-2',
     children: [
-      // Row 1: selection + search. flex-wrap so narrow windows flow instead of
-      // clipping the right edge; every label is nowrap so CJK text never
-      // stacks one character per line.
-      jsxs('div', { className: 'flex items-center gap-x-2 gap-y-1 flex-wrap min-w-0', children: [
+      // One visual system: groups separated by hairline dividers (Divider),
+      // everything left-aligned except the export row's trailing actions.
+      // flex-wrap keeps narrow windows flowing instead of clipping.
+      // Row 1: selection group | search group.
+      jsxs('div', { className: 'flex items-center gap-x-2.5 gap-y-1 flex-wrap min-w-0', children: [
         jsx('span', { className: 'text-sm text-(--muted-foreground) whitespace-nowrap', children: t('selCount', selected.length, turns.length) }),
         jsx(Button, { size: 'xs', variant: 'text', onClick: () => setSel(null), children: t('selectAll') }),
         jsx(Button, { size: 'xs', variant: 'text', onClick: () => setSel([]), children: t('clearSel') }),
         jsx(Button, { size: 'xs', variant: 'text', onClick: () => setSel(turns.filter(x => !sel || !sel.has(x.id)).map(x => x.id)), children: t('invertSel') }),
-        jsx('span', { className: 'w-2 shrink-0' }),
+        jsx(Divider, {}),
         jsx('input', {
           className: 'text-xs rounded-md border border-(--border) bg-transparent px-2 py-1 text-(--foreground) min-w-[160px]',
           style: { width: 'min(240px, 40vw)' }, placeholder: t('searchPh'), value: q,
@@ -1444,8 +1445,8 @@ function Toolbar () {
         jsx(Button, { size: 'xs', variant: 'text', onClick: () => step(-1), children: '↑' }),
         jsx(Button, { size: 'xs', variant: 'text', onClick: () => step(1), children: '↓' })
       ] }),
-      // Row 2: display options — same wrap behavior.
-      jsxs('div', { className: 'flex items-center gap-x-3 gap-y-1 flex-wrap', children: [
+      // Row 2: layout options | content toggles.
+      jsxs('div', { className: 'flex items-center gap-x-2.5 gap-y-1 flex-wrap', children: [
         jsxs('span', { className: 'flex items-center gap-1.5', children: [
           jsx('span', { className: 'text-xs text-(--muted-foreground) whitespace-nowrap', children: t('widthL') }),
           jsx('select', {
@@ -1470,6 +1471,7 @@ function Toolbar () {
             children: ['auto', 'light', 'dark'].map(m => jsx('option', { value: m, children: t('themeM', m) }, m))
           })
         ] }),
+        jsx(Divider, {}),
         jsx('label', {
           className: 'flex items-center gap-1.5 text-xs text-(--foreground) cursor-pointer select-none whitespace-nowrap',
           children: [
@@ -1504,18 +1506,25 @@ function Toolbar () {
           ]
         }, 'full')
       ] }),
-      // Row 3: export actions, right-aligned, wraps as a group.
-      jsxs('div', { className: 'flex items-center gap-2 flex-wrap justify-end', children: [
+      // Row 3: export actions pulled left to sit with the rest — one
+      // coordinated block instead of a lone right-floating cluster.
+      jsxs('div', { className: 'flex items-center gap-2 flex-wrap', children: [
         jsx(Button, { size: 'sm', onClick: () => void doDownloadMd(), children: 'Markdown' }),
         jsx(Button, { size: 'sm', onClick: () => void doDownloadJson(), children: 'JSON' }),
         jsx(Button, { size: 'sm', onClick: () => void doDownloadHtml(), children: 'HTML' }),
         jsx(Button, { size: 'sm', onClick: () => void doDownloadPdf(), children: t('btnPdf') }),
+        jsx(Divider, {}),
         jsx(Button, { size: 'sm', onClick: () => void doDownloadPng(), children: t('btnPng') }),
         jsx(Button, { size: 'sm', onClick: () => void doCopyPng(), children: t('btnCopyPng') })
       ] }),
       (opt.meta !== false && ml) ? jsx('div', { className: 'text-xs text-(--muted-foreground)', children: ml }, 'meta') : null
     ]
   })
+}
+
+// Hairline vertical divider between toolbar groups.
+function Divider () {
+  return jsx('span', { className: 'self-stretch my-0.5 w-px bg-(--border) shrink-0', 'aria-hidden': 'true' })
 }
 
 // Editable conversation title for exports. Editing only affects the current
