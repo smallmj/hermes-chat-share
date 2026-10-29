@@ -121,6 +121,16 @@ assert(!cleaned.includes('\u001b') && !cleaned.includes('\u0007'), 'control char
 assert(cleaned.includes('[32m') && cleaned.includes('red'), 'visible text kept')
 console.log('ESC_TEST_OK')
 
+// --- inline code spans survive control-char stripping (PUA sentinel, not NUL) ---
+// Regression: the v1.1.1 control-char strip deleted the NUL sentinels around
+// code-span placeholders, so `EXIT` rendered as its bare index digit (0).
+const codeChip = mdToXhtml('出 `EXIT` 标记，@url:`https://x/a` 结束', {})
+assert(codeChip.includes('<code>EXIT</code>'), 'code span content kept: ' + codeChip)
+assert(codeChip.includes('<code>https://x/a</code>'), 'URL code span kept')
+assert.equal((mdToXhtml('`a` `bb` `ccc`', {}).match(/<code>/g) || []).length, 3, 'multiple code spans')
+assert(!mdToXhtml('x `y` z', {}).match(/>\d+</), 'no bare index digits')
+console.log('INLINE_TEST_OK')
+
 // --- splitLongText: well-formed chunks, fence-balanced, terminates ---
 const { splitLongText } = await import('./core.mjs')
 // small text is returned as-is

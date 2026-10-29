@@ -133,9 +133,13 @@ function mdToXhtml (src, opts) {
 }
 
 // inline markdown → XHTML. Escapes everything, then applies inline rules.
+// Code spans use PUA sentinels (\uE000/\uE001) instead of NUL: esc() strips
+// real control chars (ANSI escapes from captured logs), and a NUL sentinel
+// was stripped with them — every `code` span degraded to its bare index
+// digit (EXIT → 0, URLs → 0). PUA chars survive esc() and are XML-valid.
 function inline (s, keepImg) {
   const codes = []
-  let t = String(s == null ? '' : s).replace(/`([^`]+)`/g, (_, c) => { codes.push(c); return '\u0000' + (codes.length - 1) + '\u0000' })
+  let t = String(s == null ? '' : s).replace(/`([^`]+)`/g, (_, c) => { codes.push(c); return '\uE000' + (codes.length - 1) + '\uE001' })
   t = esc(t)
   if (keepImg) {
     t = t.replace(/!\[([^\]]*)\]\(([^)\s]+)[^)]*\)/g, (_, alt, src) => '<img src="' + src + '" alt="' + alt + '"/>')
@@ -146,7 +150,7 @@ function inline (s, keepImg) {
   t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
   t = t.replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>')
   t = t.replace(/~~([^~]+)~~/g, '<del>$1</del>')
-  t = t.replace(/\u0000(\d+)\u0000/g, (_, n) => '<code>' + esc(codes[+n]) + '</code>')
+  t = t.replace(/\uE000(\d+)\uE001/g, (_, n) => '<code>' + esc(codes[+n]) + '</code>')
   return t
 }
 
@@ -642,6 +646,27 @@ function slugTitle (s) {
 
 const PAGE_MAX = 7900 // CSS px per PNG page (x2 DPR = 15800, under the 16384 GPU-texture cap)
 const PAGE_HEAD = 160 // first-page headroom for the title + meta header
+const RASTER_SLACK = 240 // headroom over the measured height; cropped back after raster
+
+// App-stylesheet-proof measurement. A plain offscreen div inherits Hermes'
+// global stylesheets (resets, line-height overrides), but the SVG raster
+// sees ONLY exportCss — the drift compounds over long pages and used to
+// clip the tail of the export. A closed shadow root with `all:initial` on
+// the host gives the measurement exactly the style environment the SVG
+// rasterizer has. (SLACK + bottom-crop in pageToPng absorbs any residue.)
+function makeIsoHolder (width) {
+  const host = document.createElement('div')
+  host.style.cssText = 'all:initial;display:block;position:fixed;left:-20000px;top:0;visibility:hidden;z-index:-1;width:' + width + 'px;'
+  const root = host.attachShadow({ mode: 'closed' })
+  const style = document.createElement('style')
+  const holder = document.createElement('div')
+  holder.className = 'chsh-wrap'
+  holder.style.cssText = 'width:' + width + 'px;'
+  root.appendChild(style)
+  root.appendChild(holder)
+  document.body.appendChild(host)
+  return { host, style, holder }
+}
 
 function fragWithCss (turn, th, opt) {
   return turnXhtml(turn, { images: false, tools: opt.tools, full: opt.full }, th)
@@ -655,13 +680,9 @@ function fragWithCss (turn, th, opt) {
 // a page used to overflow the 16384 device-px canvas cap and render truncated.
 function buildPages (turns, th, opt) {
   const optI = { images: false, tools: opt.tools, full: opt.full }
-  const holder = document.createElement('div')
-  holder.className = 'chsh-wrap'
-  holder.style.cssText = 'position:fixed;left:-20000px;top:0;width:' + opt.width + 'px;visibility:hidden;z-index:-1;'
-  const style = document.createElement('style')
-  style.textContent = exportCss(th, opt)
-  document.documentElement.appendChild(style)
-  document.documentElement.appendChild(holder)
+  const iso = makeIsoHolder(opt.width)
+  const { holder } = iso
+  iso.style.textContent = exportCss(th, opt)
   try {
     const measure = inner => {
       holder.innerHTML = '<div class="chsh-pad"><div class="chsh-turn">' + inner + '</div></div>'
@@ -704,7 +725,7 @@ function buildPages (turns, th, opt) {
     if (cur.length) pages.push(cur)
     return pages
   } finally {
-    holder.remove(); style.remove()
+    iso.host.remove()
   }
 }
 
@@ -728,35 +749,59 @@ async function pageToPng (parts, th, opt) {
     (opt.metaLine ? '<div class="chsh-meta">' + esc(opt.metaLine) + '</div>' : '')
   const body = '<div class="chsh-pad">' + headHtml + parts.join('') +
     '<div class="chsh-foot">Hermes · ' + esc(fmtTs(Date.now() / 1000)) + '</div></div>'
-  // one measurement pass for the exact page height, then rasterize
-  const holder = document.createElement('div')
-  holder.className = 'chsh-wrap'
-  holder.style.cssText = 'position:fixed;left:-20000px;top:0;width:' + opt.width + 'px;visibility:hidden;'
-  const style = document.createElement('style')
-  style.textContent = exportCss(th, opt)
-  document.documentElement.appendChild(style)
-  document.documentElement.appendChild(holder)
+  // one measurement pass in the isolated (app-CSS-proof) holder
+  const iso = makeIsoHolder(opt.width)
+  iso.style.textContent = exportCss(th, opt)
   let height
-  try { holder.innerHTML = body; height = Math.ceil(holder.getBoundingClientRect().height) } finally { holder.remove(); style.remove() }
-  const svg = svgWrap(body, opt.width, height, exportCss(th, opt), th)
-  const img = await loadSvgImage(svg, opt.width)
+  try { iso.holder.innerHTML = body; height = Math.ceil(iso.holder.getBoundingClientRect().height) } finally { iso.host.remove() }
+  // Rasterize with SLACK headroom, then crop to the true painted bottom.
+  // Residual measure-vs-raster drift (rounding, font fallback differences)
+  // used to clip the tail inside the foreignObject on long pages.
   const dpr = 2
+  const rasterH = Math.min(height + RASTER_SLACK, 8100) // ×2 DPR stays under the 16384 GPU cap
+  const svg = svgWrap(body, opt.width, rasterH, exportCss(th, opt), th)
+  const img = await loadSvgImage(svg, opt.width)
   const canvas = document.createElement('canvas')
   canvas.width = opt.width * dpr
-  canvas.height = height * dpr
+  canvas.height = rasterH * dpr
   const ctx = canvas.getContext('2d')
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.fillStyle = th.bg
-  ctx.fillRect(0, 0, opt.width, height)
-  ctx.drawImage(img, 0, 0, opt.width, height)
+  ctx.fillRect(0, 0, opt.width, rasterH)
+  ctx.drawImage(img, 0, 0, opt.width, rasterH)
   // Taint probe: toBlob on a tainted canvas throws a bare SecurityError;
   // name the actual cause (a non-origin-clean SVG source) instead.
   try { ctx.getImageData(0, 0, 1, 1) } catch (e) { throw new Error('canvas-tainted-svg-source') }
-  const blob = await new Promise(res => canvas.toBlob(res, 'image/png'))
+  // bottom-up band scan for the last painted row (bg = solid th.bg)
+  const bgc = parseCssRgba(th.bg) || { r: 255, g: 255, b: 255 }
+  const isBgRow = (data, w, y) => {
+    for (let x = 0; x < w; x += 2) {
+      const i = (y * w + x) * 4
+      if (data[i + 3] !== 0 && (Math.abs(data[i] - bgc.r) > 8 || Math.abs(data[i + 1] - bgc.g) > 8 || Math.abs(data[i + 2] - bgc.b) > 8)) return false
+    }
+    return true
+  }
+  let contentBottom = height // assume measured height when everything is bg
+  const BAND = 256 // device px per scan band
+  scan: for (let y1 = canvas.height; y1 > 0; y1 -= BAND) {
+    const y0 = Math.max(0, y1 - BAND)
+    const data = ctx.getImageData(0, y0, canvas.width, y1 - y0).data
+    for (let y = y1 - y0 - 1; y >= 0; y--) {
+      if (!isBgRow(data, canvas.width, y)) { contentBottom = Math.ceil((y0 + y + 1) / dpr); break scan }
+    }
+  }
+  const finalH = Math.max(1, Math.min(rasterH, contentBottom + 8))
+  let out = canvas
+  if (finalH < rasterH) {
+    out = document.createElement('canvas')
+    out.width = canvas.width; out.height = finalH * dpr
+    out.getContext('2d').drawImage(canvas, 0, 0)
+  }
+  const blob = await new Promise(res => out.toBlob(res, 'image/png'))
   if (!blob) throw new Error('png-encode-failed')
-  const jpeg = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.92))
+  const jpeg = await new Promise(res => out.toBlob(res, 'image/jpeg', 0.92))
   if (!jpeg) throw new Error('jpeg-encode-failed')
-  return { blob, jpeg, height, wDev: opt.width * dpr, hDev: height * dpr }
+  return { blob, jpeg, height: finalH, wDev: opt.width * dpr, hDev: finalH * dpr }
 }
 // -- session meta (model / thinking level / cache / speed / Hermes version) ---
 // Pure helpers: normalizeSessionInfo maps the `session.info` RPC payload,
