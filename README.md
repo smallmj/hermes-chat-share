@@ -10,7 +10,7 @@ Share Hermes Desktop conversations as **long PNG screenshots, self-contained HTM
 
 ## Install
 
-> ✅ Officially listed in the **Hermes Agent plugin catalog** (community tier) — merged via [NousResearch/hermes-agent#144552](https://github.com/NousResearch/hermes-agent/pull/144552). Available in the docs at [hermes-agent.nousresearch.com/docs/plugins/hermes-chat-share](https://hermes-agent.nousresearch.com/docs/plugins/hermes-chat-share).
+> ✅ Officially listed in the **Hermes Agent plugin catalog** (community tier) — merged via [NousResearch/hermes-agent#144552](https://github.com/NousResearch/hermes-agent/pull/144552), updated to v1.1.8 via [#146455](https://github.com/NousResearch/hermes-agent/pull/146455). Available in the docs at [hermes-agent.nousresearch.com/docs/plugins/hermes-chat-share](https://hermes-agent.nousresearch.com/docs/plugins/hermes-chat-share).
 
 **Option A — Desktop plugin market (recommended)**
 
@@ -47,7 +47,7 @@ If the page doesn't show up: `⌘K / Ctrl+K` → `Reload desktop plugins`. On/of
 - **Per-turn collapsing**: every turn shows just your question and the final answer; *expand (N more replies · M tool calls)* reveals the rest, per turn.
 - **Share-scope checkbox**: uncheck “share full conversation” and **all three exports** contain only question + final answer — exactly what the collapsed view shows.
 
-**Honest session metadata** — model & provider, thinking effort, cache hit rate, output speed (tok/s), token totals and Hermes version appear in the page header and in every export, read from the gateway's canonical `session.info`. Fields that aren't available are omitted, never invented.
+**Honest session metadata** — model & provider, thinking effort, cache hit rate, output speed (tok/s), token totals and Hermes version appear in the page header and in every export, read from the gateway's real surfaces — the `session.usage` RPC and `session.info` gateway events. Fields that aren't available are omitted, never invented.
 
 **Exports**
 - **PNG long image** at 680/880/1080 px wide, three font scales, 2× DPR, colors snapshotted from your live app theme (light *and* dark). Huge single replies are **split across pages automatically**, so a 10,000-line log dump can't silently truncate the image. Tall exports auto-paginate; multi-page downloads are **stitched back into one long PNG**, so the browser's one-download-per-page limit never eats pages.
@@ -73,7 +73,7 @@ Everything runs locally inside your Desktop app. Conversation content never leav
 ```bash
 node --check desktop/plugin.js   # syntax
 ./dev-tests/stub-runner.sh       # SDK registration smoke test → STUB_OK
-node dev-tests/meta.test.mjs     # metadata / color-scoping / export-scope unit tests
+node dev-tests/meta.test.mjs     # 12 unit suites: meta/colors/scope/theme/JSON/range/highlight/esc/inline/split/PDF
 ```
 
 Git installs require the `desktop/plugin.js` layout at repo root — see the [plugin SDK docs](https://hermes-agent.nousresearch.com/docs/developer-guide/desktop-plugin-sdk).
