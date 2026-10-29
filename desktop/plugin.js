@@ -12,7 +12,7 @@ import { useEffect, useState } from 'react'
 const PLUGIN_ID = 'hermes-chat-share'
 // Keep in sync with plugin.yaml. Rendered as a tiny badge in the page header
 // so "did my update actually load?" is always answerable at a glance.
-const PLUGIN_VERSION = '1.1.6'
+const PLUGIN_VERSION = '1.1.7'
 const ROUTE = '/chat-share'
 
 // ==== CORE START ==== (dependency-free export core; mirrored by the test harness)
@@ -249,7 +249,7 @@ function exportCss (th, opt) {
     'padding:2px 9px;margin:2px 6px 2px 0;font-size:' + (fs * 0.74) + 'px;color:' + th.muted + ';}',
     '.chsh-ph{color:' + th.muted + ';border:1px dashed ' + th.border + ';border-radius:6px;padding:0 6px;font-size:0.85em;}',
     '.chsh-img{max-width:100%;height:auto;border-radius:8px;margin:6px 0;display:block;}',
-    '.chsh-foot{margin-top:26px;padding-top:12px;border-top:1px solid ' + th.border + ';font-size:' + (fs * 0.72) + 'px;color:' + th.muted + ';}'
+    '.chsh-foot{margin-top:26px;padding-top:12px;border-top:1px solid ' + th.border + ';font-size:' + (fs * 0.72) + 'px;color:' + th.muted + ';line-height:1.7;}'
   ]
   // Syntax-highlight token colors (only present on fixed palettes; auto theme
   // exports keep plain code, matching the pre-highlight look).
@@ -760,7 +760,8 @@ async function pageToPng (parts, th, opt) {
   const headHtml = (opt.title ? '<div class="chsh-title">' + esc(opt.title) + '</div>' : '') +
     (opt.metaLine ? '<div class="chsh-meta">' + esc(opt.metaLine) + '</div>' : '')
   const body = '<div class="chsh-pad">' + headHtml + parts.join('') +
-    '<div class="chsh-foot">Hermes · ' + esc(fmtTs(Date.now() / 1000)) + '</div></div>'
+    '<div class="chsh-foot">Hermes · ' + esc(fmtTs(Date.now() / 1000)) +
+    (opt.metaLine ? '<br/>' + esc(opt.metaLine) : '') + '</div></div>'
   // one measurement pass in the isolated (app-CSS-proof) holder
   const iso = makeIsoHolder(opt.width)
   iso.style.textContent = exportCss(th, opt)
@@ -1063,7 +1064,9 @@ async function renderImages () {
   const pages = buildPages(turns, th, opt)
   const out = []
   for (let k = 0; k < pages.length; k++) {
-    out.push(await pageToPng(pages[k], th, k === 0 ? { ...opt, title: stateAtom.get().title, metaLine: ml } : opt))
+    // metaLine rides on EVERY page's footer (and page 1's header too) — a
+    // per-page stamp survives cropping/sharing of a single page.
+    out.push(await pageToPng(pages[k], th, { ...opt, title: k === 0 ? stateAtom.get().title : '', metaLine: ml }))
   }
   return out
 }
@@ -1243,7 +1246,8 @@ function exportHtml (opts) {
     '<div class="chsh-title">' + esc(stateAtom.get().title || t('shareTitle')) + '</div>' +
     '<div class="chsh-meta">' + esc(fmtTs(Date.now() / 1000)) + ' · ' + turns.length + ' ' + t('turnsN') + (ml ? ' · ' + esc(ml) : '') + '</div>' +
     turns.map(x => turnXhtml(x, { images: true, tools: opt.tools, full: opt.full }, th)).join('') +
-    '<div class="chsh-foot">Hermes</div></div></div>'
+    '<div class="chsh-foot">Hermes · ' + esc(fmtTs(Date.now() / 1000)) +
+    (ml ? '<br/>' + esc(ml) : '') + '</div></div></div>'
   const html = '<!DOCTYPE html><html><head><meta charset="utf-8"/><title>' + esc(stateAtom.get().title || 'Hermes') +
     '</title><style>body{margin:0;background:' + th.bg + ';}' + exportCss(th, { ...opt, images: true }) +
     '.chsh-wrap img{max-width:100%;}.chsh-wrap .chsh-body{min-width:0;}</style></head><body>' + body + '</body></html>'
@@ -1264,6 +1268,8 @@ function exportMd () {
     if (opt.tools && opt.full !== false && turn.tools.length) s += turn.tools.map(x => '- 🔧 `' + x.name + '`' + (x.ctx ? ' — ' + x.ctx : '')).join('\n') + '\n\n'
     s += '---\n\n'
   }
+  // Footer: Hermes + export time, session info beneath (same as PNG/HTML).
+  s += '_Hermes · ' + fmtTs(Date.now() / 1000) + '_' + (ml ? '  \n_' + ml + '_' : '') + '\n'
   return new Blob([s], { type: 'text/markdown;charset=utf-8' })
 }
 

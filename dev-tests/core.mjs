@@ -231,7 +231,7 @@ function exportCss (th, opt) {
     'padding:2px 9px;margin:2px 6px 2px 0;font-size:' + (fs * 0.74) + 'px;color:' + th.muted + ';}',
     '.chsh-ph{color:' + th.muted + ';border:1px dashed ' + th.border + ';border-radius:6px;padding:0 6px;font-size:0.85em;}',
     '.chsh-img{max-width:100%;height:auto;border-radius:8px;margin:6px 0;display:block;}',
-    '.chsh-foot{margin-top:26px;padding-top:12px;border-top:1px solid ' + th.border + ';font-size:' + (fs * 0.72) + 'px;color:' + th.muted + ';}'
+    '.chsh-foot{margin-top:26px;padding-top:12px;border-top:1px solid ' + th.border + ';font-size:' + (fs * 0.72) + 'px;color:' + th.muted + ';line-height:1.7;}'
   ]
   // Syntax-highlight token colors (only present on fixed palettes; auto theme
   // exports keep plain code, matching the pre-highlight look).
@@ -742,7 +742,8 @@ async function pageToPng (parts, th, opt) {
   const headHtml = (opt.title ? '<div class="chsh-title">' + esc(opt.title) + '</div>' : '') +
     (opt.metaLine ? '<div class="chsh-meta">' + esc(opt.metaLine) + '</div>' : '')
   const body = '<div class="chsh-pad">' + headHtml + parts.join('') +
-    '<div class="chsh-foot">Hermes · ' + esc(fmtTs(Date.now() / 1000)) + '</div></div>'
+    '<div class="chsh-foot">Hermes · ' + esc(fmtTs(Date.now() / 1000)) +
+    (opt.metaLine ? '<br/>' + esc(opt.metaLine) : '') + '</div></div>'
   // one measurement pass in the isolated (app-CSS-proof) holder
   const iso = makeIsoHolder(opt.width)
   iso.style.textContent = exportCss(th, opt)
