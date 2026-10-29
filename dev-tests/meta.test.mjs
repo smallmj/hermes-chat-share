@@ -113,3 +113,66 @@ assert(md.includes('tok-kw') && md.includes('<pre><code class="lang-js">'))
 const mdPlain = mdToXhtml('```\nplain <code>\n```', {})
 assert(!mdPlain.includes('tok-') && mdPlain.includes('&lt;code&gt;'))
 console.log('HL_TEST_OK')
+
+// --- esc() drops XML-invalid control chars (ANSI escapes from captured logs) ---
+const dirty = 'before \u001b[32m red \u0007 bell \u001b[0m after'
+const cleaned = mdToXhtml(dirty, {})
+assert(!cleaned.includes('\u001b') && !cleaned.includes('\u0007'), 'control chars stripped')
+assert(cleaned.includes('[32m') && cleaned.includes('red'), 'visible text kept')
+console.log('ESC_TEST_OK')
+
+// --- splitLongText: well-formed chunks, fence-balanced, terminates ---
+const { splitLongText } = await import('./core.mjs')
+// small text is returned as-is
+assert.deepEqual(splitLongText('hello', s => s.length <= 100), ['hello'])
+// plain text splits on line boundaries, every chunk fits
+const plain = Array.from({ length: 50 }, (_, i) => 'line' + i).join('\n')
+const plainChunks = splitLongText(plain, s => s.length <= 120)
+assert(plainChunks.length > 1)
+for (const c of plainChunks) assert(c.length <= 120, 'chunk fits: ' + c.length)
+assert.equal(plainChunks.flatMap(c => c.split('\n')).join('\n'), plain, 'content preserved')
+// fenced code: chunks stay fence-balanced (even count of ``` per chunk)
+const fenceSrc = '```python\n' + Array.from({ length: 40 }, (_, i) => 'x = ' + i).join('\n') + '\n```'
+const fenceChunks = splitLongText(fenceSrc, s => s.length <= 150)
+assert(fenceChunks.length > 1)
+for (const c of fenceChunks) {
+  assert.equal((c.match(/```/g) || []).length % 2, 0, 'fence balanced: ' + JSON.stringify(c.slice(0, 40)))
+  assert(c.length <= 150, 'fence chunk fits')
+}
+// unterminated giant single line terminates via char-cut
+const giant = 'A'.repeat(5000)
+const giantChunks = splitLongText(giant, s => s.length <= 200)
+assert(giantChunks.length === 25 && giantChunks.every(c => c.length <= 200))
+assert.equal(giantChunks.join(''), giant, 'char-cut preserves bytes')
+// giant line inside a fence also terminates, fences stay balanced
+const giantFence = '```\n' + 'B'.repeat(5000) + '\n```'
+const gfChunks = splitLongText(giantFence, s => s.length <= 300)
+assert(gfChunks.length > 10)
+for (const c of gfChunks) assert.equal((c.match(/```/g) || []).length % 2, 0, 'giant-fence balanced')
+console.log('SPLIT_TEST_OK')
+
+// --- buildPdfFromJpegs: structurally valid PDF ---
+const { buildPdfFromJpegs } = await import('./core.mjs')
+// tiny JPEG-shaped payload (SOI … EOI), embedded verbatim
+const fakeJpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0xff, 0xd9])
+const pdfBytes = buildPdfFromJpegs([
+  { bytes: fakeJpeg, wPx: 1760, hPx: 3200 },
+  { bytes: fakeJpeg, wPx: 1760, hPx: 1600 }
+])
+const pdfStr = Buffer.from(pdfBytes).toString('latin1')
+assert(pdfStr.startsWith('%PDF-1.4'), 'pdf header')
+assert(pdfStr.includes('/Type /Catalog') && pdfStr.includes('/Count 2'))
+assert.equal((pdfStr.match(/\/Type \/Page[^s]/g) || []).length, 2, 'two page objects')
+assert.equal((pdfStr.match(/\/Filter \/DCTDecode/g) || []).length, 2, 'two jpeg xobjects')
+assert(pdfStr.trimEnd().endsWith('%%EOF'), 'eof marker')
+// xref offsets really point at object headers
+const xrefAt = Number(pdfStr.match(/startxref\n(\d+)\n%%EOF/)[1])
+assert.equal(pdfStr.slice(xrefAt, xrefAt + 4), 'xref', 'startxref points at xref table')
+for (const row of pdfStr.slice(xrefAt).split('\n').slice(2)) {
+  const m = row.match(/^(\d{10}) 00000 n/)
+  if (!m) continue
+  assert(/^\d+ 0 obj/.test(pdfStr.slice(Number(m[1]), Number(m[1]) + 20)), 'offset hits an obj header')
+}
+// byte-exact JPEG embedding
+assert(pdfStr.includes(Buffer.from(fakeJpeg).toString('latin1')), 'jpeg bytes embedded verbatim')
+console.log('PDF_TEST_OK')

@@ -50,11 +50,11 @@ If the page doesn't show up: `⌘K / Ctrl+K` → `Reload desktop plugins`. On/of
 **Honest session metadata** — model & provider, thinking effort, cache hit rate, output speed (tok/s), token totals and Hermes version appear in the page header and in every export, read from the gateway's canonical `session.info`. Fields that aren't available are omitted, never invented.
 
 **Exports**
-- **PNG long image** at 680/880/1080 px wide, three font scales, 2× DPR, colors snapshotted from your live app theme (light *and* dark). Tall exports auto-paginate; multi-page downloads are **stitched back into one long PNG**, so the browser's one-download-per-page limit never eats pages.
+- **PNG long image** at 680/880/1080 px wide, three font scales, 2× DPR, colors snapshotted from your live app theme (light *and* dark). Huge single replies are **split across pages automatically**, so a 10,000-line log dump can't silently truncate the image. Tall exports auto-paginate; multi-page downloads are **stitched back into one long PNG**, so the browser's one-download-per-page limit never eats pages.
 - **Theme override** — force **light or dark** for the export regardless of your app theme (dark-app users sharing readable light images into group chats), with hand-calibrated fixed palettes. Code blocks are **syntax highlighted** (JS/TS, Python, JSON, Shell, HTML/XML, CSS) in both palettes.
-- **Copy image** stays honest: it goes to the clipboard as rich text with inline base64 (pastes straight into WPS / Word / Google Docs). When a copy genuinely cannot happen — the image spans pages, or desktop security policy blocks plugin clipboard writes — a dialog explains the exact reason and lets **you** choose *Download image* or *Cancel*. It never downloads behind your back.
+- **Copy image** stays honest: multi-page exports are merged first, so the copied image holds as much as the browser canvas physically allows — rich-text base64 that pastes straight into WPS / Word / Google Docs. When a copy genuinely cannot happen — the merged image exceeds canvas limits, or desktop security policy blocks plugin clipboard writes — a dialog explains the exact reason and lets **you** choose *Download paginated PNGs* or *Cancel*. It never downloads behind your back.
 - **Self-contained HTML**, **Markdown**, and **JSON** (machine-readable turns with the same share-scope rules as the visual exports), each a single file.
-- **PDF via print** — one click opens a print-tuned view (light palette, page margins, per-turn page-break protection); choose *Save as PDF* in the dialog.
+- **PDF as a direct download** — one click produces a real `.pdf` file (each page an embedded full-bleed image, zero dependencies, no print dialog).
 - Keeps real rendering: code blocks, tables, quotes, inline code, tool-call chips (checkbox-controlled), timestamps. External images, `MEDIA:` attachments and `::preview` widgets become labeled placeholders in PNGs (canvas-taint rules) and keep their links in HTML/Markdown.
 - **Your export prefs are remembered** (width, font, theme, toggles) and the export **title is editable** inline before you share.
 
@@ -82,7 +82,8 @@ Git installs require the `desktop/plugin.js` layout at repo root — see the [pl
 
 - Very old archived sessions may lack live metadata — the meta line silently omits unavailable fields.
 - PNGs cannot embed cross-origin raster images (browser canvas rules); HTML/Markdown keep them as links.
-- One merged PNG is capped by browser canvas limits (≈65,535 px side / 268 M px total, roughly 5–8 pages); beyond that, pages download one by one with a clear notice.
+- One merged PNG is capped by browser canvas limits (≈65,535 px side / 268 M px total); beyond that, a dialog offers **paginated PNG download** or switching to HTML / Markdown / PDF for the whole content in one file.
+- Garbled `�` diamonds in an export usually come from the **conversation data itself** (e.g. logs captured on Windows via `powershell Get-Content` decoding UTF-8 as GBK). The plugin renders the session byte-for-byte; fix the capture encoding at the source.
 
 ## License
 
