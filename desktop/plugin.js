@@ -925,6 +925,16 @@ function parseCssRgba (s) {
     const a = rgb[4] == null ? 1 : (String(rgb[4]).endsWith('%') ? parseFloat(rgb[4]) / 100 : parseFloat(rgb[4]))
     return { r: +rgb[1], g: +rgb[2], b: +rgb[3], a: Number.isFinite(a) ? Math.min(1, Math.max(0, a)) : 1 }
   }
+  // getComputedStyle serializes color-mix / chain results in the sRGB space as
+  // `color(srgb r g b / a)` with 0..1 floats (Chromium ≥ the app's Electron).
+  // Missing this made the auto-theme probe reject real dark-theme values and
+  // fall back to the light palette — light bg + real dark blocks in one export.
+  const srgb = /^color\(\s*srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+))?\s*\)$/i.exec(str)
+  if (srgb) {
+    const c255 = v => Math.round(Math.min(255, Math.max(0, parseFloat(v) * 255)))
+    const a = srgb[4] == null ? 1 : parseFloat(srgb[4])
+    return { r: c255(srgb[1]), g: c255(srgb[2]), b: c255(srgb[3]), a: Number.isFinite(a) ? Math.min(1, Math.max(0, a)) : 1 }
+  }
   return null
 }
 
