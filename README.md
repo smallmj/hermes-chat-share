@@ -8,6 +8,8 @@ Share Hermes Desktop conversations as **long PNG screenshots, self-contained HTM
 
 ![Export sample](sample.png)
 
+*The sample above shows v1.1.x styling — the v1.2.0 screenshot will be refreshed after acceptance.*
+
 ## Install
 
 > ✅ Officially listed in the **Hermes Agent plugin catalog** (community tier) — merged via [NousResearch/hermes-agent#144552](https://github.com/NousResearch/hermes-agent/pull/144552), updated to v1.1.8 via [#146455](https://github.com/NousResearch/hermes-agent/pull/146455). Available in the docs at [hermes-agent.nousresearch.com/docs/plugins/hermes-chat-share](https://hermes-agent.nousresearch.com/docs/plugins/hermes-chat-share).
@@ -57,8 +59,11 @@ If the page doesn't show up: `⌘K / Ctrl+K` → `Reload desktop plugins`. On/of
 - **PDF as a direct download** — one click produces a real `.pdf` file (each page an embedded full-bleed image, zero dependencies, no print dialog).
 - Keeps real rendering: code blocks, tables, quotes, inline code, tool-call chips (checkbox-controlled), timestamps. External images, `MEDIA:` attachments and `::preview` widgets become labeled placeholders in PNGs (canvas-taint rules) and keep their links in HTML/Markdown.
 - **Your export prefs are remembered** (width, font, theme, toggles) and the export **title is editable** inline before you share.
+- **Export styling polished for v1.2.0** — avatars and tool icons are vectors, no emoji; user bubbles tightened into light-tinted, small-radius blocks; heading → body → code rhythm runs denser; blockquote bar, inline-code tint and footer rule read crisper. And the “follow app theme” probe is fixed: v1.1.8 always fell back to a hardcoded light palette — exports now really snapshot your live theme.
 
 **The UI follows the app language** (English / 简体中文 automatically), and dialogs are opaque and theme-correct in both modes.
+
+**The share pane follows the app theme** (v1.2.0) — colors, borders and hover states bind to the host's semantic tokens end to end, so card outlines, dividers, the turn gutter, the focused-turn outline and the sticky toolbar background (some of which silently rendered nothing in v1.1.8) now come up right under any Hermes theme, light or dark. Controls are the host's own primitives: a segmented theme picker, host dropdowns for width and font, a proper search field, and the host dialog for export-failure prompts; tool chips and stepper buttons use vector icons.
 
 ## How it works
 
