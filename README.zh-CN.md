@@ -10,7 +10,7 @@
 
 ## 安装
 
-> ✅ 已正式收录进 **Hermes Agent 官方插件目录**（community 层级）——经 [NousResearch/hermes-agent#144552](https://github.com/NousResearch/hermes-agent/pull/144552) 合并，v1.1.8 更新经 [#146455](https://github.com/NousResearch/hermes-agent/pull/146455) 提交，官方文档页：[hermes-agent.nousresearch.com/docs/plugins/hermes-chat-share](https://hermes-agent.nousresearch.com/docs/plugins/hermes-chat-share)。
+> ✅ 已正式收录进 **Hermes Agent 官方插件目录**（community 层级）——经 [NousResearch/hermes-agent#144552](https://github.com/NousResearch/hermes-agent/pull/144552) 合并，v1.2.0 更新经 [#157495](https://github.com/NousResearch/hermes-agent/pull/157495) 提交（此前：[#146455](https://github.com/NousResearch/hermes-agent/pull/146455)），官方文档页：[hermes-agent.nousresearch.com/docs/plugins/hermes-chat-share](https://hermes-agent.nousresearch.com/docs/plugins/hermes-chat-share)。
 
 **方式一：桌面插件市场（推荐）**
 
