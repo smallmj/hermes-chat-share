@@ -45,6 +45,28 @@ assert.equal(typeof dark, 'string')
 assert.ok(dark.includes('font-size:18px'), 'scale factor applied (15*1.2)')
 console.log('CSS_TEST_OK')
 
+// --- export styling shape (ticket #16: restrained document feel) ----------
+// Expected literals below are worked examples: at scale 1 the base size is
+// 15px and one rhythm step is 9px; at scale 1.2 they become 18px / 11px.
+// Spacing must follow the 字号 scale, never fixed pixels.
+assert.ok(sheet.includes('.chsh-user .chsh-body{background:#f6f6f6;border:1px solid rgba(0,0,0,0.14);border-radius:8px;padding:9px 12px;margin:0 9px;'),
+  'user bubble tightened: small radius, light fill, narrow indent')
+assert.ok(sheet.includes('.chsh-turn{margin:0 0 18px'), 'block rhythm tightened at scale 1 (2 steps of 9px)')
+assert.ok(dark.includes('.chsh-turn{margin:0 0 22px'), 'block rhythm follows the scale factor (2 steps of 11px)')
+assert.ok(sheet.includes('.chsh-body p{margin:0 0 9px;line-height:1.62'), 'paragraph rhythm tightened at scale 1')
+assert.ok(dark.includes('.chsh-body p{margin:0 0 11px'), 'paragraph rhythm follows the scale factor')
+assert.ok(sheet.includes('.chsh-av{'), 'avatar-chip rule present')
+assert.ok(sheet.includes('.chsh-ic{'), 'icon sizing rule present')
+assert.ok(sheet.includes('.chsh-body blockquote{border-left:3px solid #2563eb;background:#eceff3;'),
+  'quote bar strengthened (accent bar over a solid tint)')
+assert.ok(sheet.includes('.chsh-body code{background:#eceff3;border:1px solid rgba(0,0,0,0.14);border-radius:5px;padding:2px 5px;'),
+  'inline-code background strengthened')
+assert.ok(sheet.includes('.chsh-foot{margin-top:18px;padding-top:8px;border-top:2px solid rgba(0,0,0,0.14)'),
+  'footer divider strengthened')
+// typography stays system-only: no webfont face, no fetchable url anywhere
+assert.ok(!/@font-face|url\(/.test(sheet), 'embedded stylesheet must not reference a webfont or a URL')
+console.log('STYLE_TEST_OK')
+
 // --- color solidification (dialog readability on vibrancy themes) ---
 const { parseCssRgba, solidColor, isDarkColor } = await import('./core.mjs')
 assert.deepEqual(parseCssRgba('#abc'), { r: 170, g: 187, b: 204, a: 1 })
@@ -56,14 +78,43 @@ assert.equal(isDarkColor('rgb(250,250,250)'), false)
 console.log('COLOR_TEST_OK')
 
 // --- full:false export keeps only question + final answer ---
-const { turnXhtml } = await import('./core.mjs')
+const { turnXhtml, toolsXhtml } = await import('./core.mjs')
 const thx = { bg: '#fff', fg: '#111', card: '#f8f8f8', border: '#ddd', accent: '#55f', muted: '#888', codeBg: '#eee' }
 const turn = { id: 0, user: { text: '问题一' }, asst: [{ text: '中间回复甲' }, { text: '最终答复乙' }], tools: [{ name: 'terminal', ctx: 'ls' }] }
 const fullX = turnXhtml(turn, { images: false, tools: true, full: true }, thx)
 const briefX = turnXhtml(turn, { images: false, tools: true, full: false }, thx)
-assert(fullX.includes('中间回复甲') && fullX.includes('🔧') && fullX.includes('最终答复乙'))
-assert(!briefX.includes('中间回复甲') && !briefX.includes('🔧') && briefX.includes('问题一') && briefX.includes('最终答复乙'))
+assert(fullX.includes('中间回复甲') && fullX.includes('chsh-tool') && fullX.includes('最终答复乙'))
+assert(!briefX.includes('中间回复甲') && !briefX.includes('chsh-tool') && briefX.includes('问题一') && briefX.includes('最终答复乙'))
 console.log('FULLFLAG_TEST_OK')
+
+// --- role icons are inline vectors, never emoji (ticket #16) --------------
+// The export artifact is opened outside Hermes with no host present, so the
+// avatar / role / tool glyphs must travel inside the markup itself.
+const iconTurn = { id: 1, user: { text: '用户提问', ts: 1700000000 }, asst: [{ text: '助手回答', ts: 1700000001 }], tools: [{ name: 'terminal', ctx: 'ls' }] }
+const iconOpt = { images: true, tools: true, full: true }
+const markedUp = turnXhtml(iconTurn, iconOpt, thx)
+for (const glyph of ['👤', '🤖', '🔧']) {
+  assert(!markedUp.includes(glyph), 'export markup must not render an emoji as an icon: ' + glyph)
+}
+const whoBlocks = markedUp.match(/<div class="chsh-who">[\s\S]*?<\/div>/g) || []
+assert.equal(whoBlocks.length, 2, 'user + assistant turn headers present')
+for (const w of whoBlocks) {
+  assert(w.includes('<svg'), 'turn header draws its avatar as an inline SVG: ' + w)
+  assert(/<svg[^>]*class="chsh-ic"/.test(w), 'icon carries the chsh-ic class (sized by the stylesheet)')
+  assert(/<svg[^>]*viewBox="0 0 24 24"/.test(w), 'icon has a viewBox so it scales with the font')
+  // The PNG pipeline nests this inside an SVG <foreignObject>, i.e. XML parsing:
+  // a nested <svg> only lands in the SVG namespace if it re-declares xmlns.
+  assert(/<svg[^>]*xmlns="http:\/\/www\.w3\.org\/2000\/svg"/.test(w), 'nested svg re-declares the SVG namespace')
+  assert(/currentColor/.test(w), 'icon color follows currentColor (driven by embedded values)')
+}
+assert(/<span class="chsh-av chsh-av-user"/.test(markedUp), 'user avatar chip class present')
+assert(/<span class="chsh-av chsh-av-asst"/.test(markedUp), 'assistant avatar chip class present')
+const chips = toolsXhtml(iconTurn)
+assert(chips.includes('<svg') && /<svg[^>]*viewBox="0 0 24 24"/.test(chips), 'tool chip has an inline SVG icon')
+assert(/class="chsh-tool"/.test(chips) && chips.includes('terminal'), 'tool chip keeps its class and label')
+// the whole fragment must stay self-contained: no image, no link, no fetch
+assert(!/<(img|image|link|script)\b|url\(|xlink:href|@import/i.test(markedUp), 'export markup references nothing external')
+console.log('ICON_TEST_OK')
 
 // --- theme override: fixed palettes + resolution ---
 const { fixedThemePalette, resolveTheme } = await import('./core.mjs')

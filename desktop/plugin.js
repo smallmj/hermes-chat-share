@@ -167,11 +167,13 @@ function fmtTs (ts) {
 }
 
 // Read the app theme once, as concrete values passed into the export CSS.
+// Probe targets are the `--dt-*` family the host actually paints per theme
+// (ADR-0002): the bare names --card/--border/--accent/--muted-foreground/--muted
+// do not exist on the host at all, so the v1.1.8 probe resolved nothing and
+// "follow the app theme" always exported the light fallback. Mechanism is
+// unchanged — a hidden element whose inline var() the browser resolves through
+// the token chain to a computed rgba, then solidified into the artifact.
 function snapshotTheme () {
-  // CSS custom props on :root are declared as unresolved chains
-  // (`--background: var(--dt-background)`), so getPropertyValue returns the
-  // token, not a color. Probe REAL elements with inline var() styles and let
-  // the browser resolve the chain to a computed rgba().
   const probe = css => {
     const d = document.createElement('div')
     d.style.cssText = 'position:fixed;left:-9999px;top:0;width:8px;height:8px;border-style:solid;border-width:1px;' + css
@@ -181,11 +183,11 @@ function snapshotTheme () {
     d.remove()
     return r
   }
-  const page = probe('background:var(--background);color:var(--foreground);border-color:var(--border)')
-  const cardP = probe('background:var(--card);border-color:var(--border)')
-  const accentP = probe('background:var(--accent)')
-  const mutedP = probe('color:var(--muted-foreground)')
-  const codeP = probe('background:var(--muted)')
+  const page = probe('background:var(--dt-background);color:var(--dt-foreground);border-color:var(--dt-border)')
+  const cardP = probe('background:var(--dt-card);border-color:var(--dt-border)')
+  const accentP = probe('background:var(--dt-accent)')
+  const mutedP = probe('color:var(--dt-muted-foreground)')
+  const codeP = probe('background:var(--dt-muted)')
   const resolve = (c, fb, base) => {
     const p = parseCssRgba(c)
     if (!p || p.a === 0) return fb
@@ -206,6 +208,10 @@ function snapshotTheme () {
 
 function exportCss (th, opt) {
   const fs = (opt.scale || 1) * 15
+  // Vertical rhythm is scale-driven, never hard pixel: g is one rhythm step
+  // (9px at scale 1, 11px at scale 1.2). Picking a bigger 字号 keeps the same
+  // proportional air instead of crowding the text at a fixed spacing.
+  const g = Math.round(fs * 0.6)
   // MUST join to a STRING before returning. Returning the bare array made
   // every call site string-concat comma-join the rules (Array toString),
   // corrupting the stylesheet — items 1/2 are halves of ONE rule, so the
@@ -215,43 +221,61 @@ function exportCss (th, opt) {
     '.chsh-wrap{box-sizing:border-box;font-family:-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC","Source Han Sans SC",sans-serif;',
     'font-size:' + fs + 'px;line-height:1.6;color:' + th.fg + ';background:' + th.bg + ';word-break:break-word;}',
     '.chsh-wrap *{box-sizing:border-box;margin:0;padding:0;}',
-    '.chsh-pad{padding:28px 26px;}',
-    '.chsh-title{font-size:' + (fs * 2) + 'px;font-weight:700;line-height:1.25;margin-bottom:10px;letter-spacing:-0.01em;}',
-    '.chsh-meta{font-size:' + (fs * 0.78) + 'px;color:' + th.muted + ';padding-bottom:16px;border-bottom:1px solid ' + th.border + ';margin-bottom:22px;}',
+    '.chsh-pad{padding:' + Math.round(fs * 1.6) + 'px ' + Math.round(fs * 1.45) + 'px;}',
+    '.chsh-title{font-size:' + (fs * 2) + 'px;font-weight:700;line-height:1.2;margin-bottom:' + Math.round(g * 0.7) + 'px;letter-spacing:-0.015em;}',
+    '.chsh-meta{font-size:' + (fs * 0.78) + 'px;color:' + th.muted + ';padding-bottom:' + g + 'px;border-bottom:1px solid ' + th.border + ';margin-bottom:' + (g * 2) + 'px;}',
     // Turn header — a real document-style heading, not a muted caption.
-    '.chsh-turn{margin:0 0 26px;page-break-inside:avoid;}',
-    '.chsh-who{font-size:' + (fs * 1.06) + 'px;font-weight:700;color:' + th.fg + ';margin:0 0 8px;display:flex;align-items:baseline;}',
-    '.chsh-ts{font-weight:400;font-size:' + (fs * 0.74) + 'px;color:' + th.muted + ';margin-left:8px;}',
-    '.chsh-user .chsh-body{background:' + th.card + ';border:1px solid ' + th.border + ';border-radius:12px;padding:12px 14px;}',
-    '.chsh-asst{margin-top:12px;}',
+    '.chsh-turn{margin:0 0 ' + (g * 2) + 'px;page-break-inside:avoid;}',
+    '.chsh-who{font-size:' + (fs * 1.06) + 'px;font-weight:700;color:' + th.fg + ';margin:0 0 ' + Math.round(g * 0.6) + 'px;display:flex;align-items:center;gap:' + Math.round(g * 0.7) + 'px;}',
+    // Avatar chip: the vector icon sits in a small round token of its own,
+    // tinted by embedded values (never a host variable — ADR-0002).
+    '.chsh-av{display:inline-flex;align-items:center;justify-content:center;flex:none;width:1.7em;height:1.7em;border-radius:50%;',
+    'border:1px solid ' + th.border + ';background:' + th.card + ';color:' + th.fg + ';}',
+    '.chsh-ic{display:block;width:1.05em;height:1.05em;}',
+    '.chsh-ts{font-weight:400;font-size:' + (fs * 0.74) + 'px;color:' + th.muted + ';}',
+    // User bubble — a light, small-radius block with a narrow indent, so a
+    // long PNG reads as a document rather than a stack of wide grey slabs.
+    '.chsh-user .chsh-body{background:' + th.card + ';border:1px solid ' + th.border + ';border-radius:8px;',
+    'padding:' + Math.round(fs * 0.6) + 'px ' + Math.round(fs * 0.8) + 'px;margin:0 ' + g + 'px;}',
+    '.chsh-user .chsh-body>p:last-child{margin-bottom:0;}',
+    '.chsh-asst{margin-top:' + g + 'px;}',
     '.chsh-asst .chsh-body>p:first-child{margin-top:0;}',
-    '.chsh-body p{margin:0 0 12px;line-height:1.7;}',
-    '.chsh-body h1,.chsh-body h2,.chsh-body h3,.chsh-body h4{margin:18px 0 10px;line-height:1.35;font-weight:700;}',
-    '.chsh-body h1{font-size:1.5em;}.chsh-body h2{font-size:1.3em;}.chsh-body h3{font-size:1.15em;}.chsh-body h4{font-size:1em;}',
+    '.chsh-body p{margin:0 0 ' + g + 'px;line-height:1.62;}',
+    '.chsh-body h1,.chsh-body h2,.chsh-body h3,.chsh-body h4{margin:' + Math.round(g * 1.5) + 'px 0 ' + Math.round(g * 0.8) + 'px;line-height:1.3;font-weight:700;}',
+    '.chsh-body h1{font-size:1.45em;}.chsh-body h2{font-size:1.28em;}.chsh-body h3{font-size:1.12em;}.chsh-body h4{font-size:1em;}',
     '.chsh-body h1:first-child,.chsh-body h2:first-child,.chsh-body h3:first-child,.chsh-body h4:first-child{margin-top:0;}',
-    '.chsh-body ul,.chsh-body ol{margin:0 0 12px;padding-left:1.5em;}',
-    '.chsh-body li{margin:4px 0;}',
-    '.chsh-body li>p{margin:0 0 4px;}',
-    '.chsh-body blockquote{border-left:3px solid ' + th.accent + ';background:' + th.card + ';padding:8px 14px;margin:0 0 12px;border-radius:0 8px 8px 0;color:' + th.muted + ';}',
+    '.chsh-body ul,.chsh-body ol{margin:0 0 ' + g + 'px;padding-left:1.4em;}',
+    '.chsh-body li{margin:2px 0;}',
+    '.chsh-body li>p{margin:0 0 2px;}',
+    '.chsh-body blockquote{border-left:3px solid ' + th.accent + ';background:' + th.codeBg + ';padding:6px 12px;',
+    'margin:0 0 ' + g + 'px;border-radius:0 6px 6px 0;color:' + th.fg + ';}',
     '.chsh-body blockquote p{margin:0 0 4px;}',
-    '.chsh-body hr{border:none;border-top:1px solid ' + th.border + ';margin:12px 0;}',
+    '.chsh-body blockquote p:last-child{margin-bottom:0;}',
+    '.chsh-body hr{border:none;border-top:1px solid ' + th.border + ';margin:' + g + 'px 0;}',
     '.chsh-body a{color:' + th.accent + ';text-decoration:none;}',
-    '.chsh-body code{background:' + th.codeBg + ';border:1px solid ' + th.border + ';border-radius:4px;padding:1px 5px;font-size:0.9em;',
+    // Inline code keeps its own (deeper) tint plus a hairline, so a `code` span
+    // reads as an object and not as a font change.
+    '.chsh-body code{background:' + th.codeBg + ';border:1px solid ' + th.border + ';border-radius:5px;padding:2px 5px;font-size:0.9em;',
     'font-family:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Consolas,"Microsoft YaHei","PingFang SC","Noto Sans CJK SC",monospace;}',
-    '.chsh-body pre{background:' + th.codeBg + ';border:1px solid ' + th.border + ';border-radius:10px;padding:12px 14px;margin:0 0 10px;',
+    '.chsh-body pre{background:' + th.codeBg + ';border:1px solid ' + th.border + ';border-radius:8px;padding:10px 12px;margin:0 0 ' + g + 'px;',
     'white-space:pre-wrap;font-size:0.86em;line-height:1.5;',
     'font-family:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Consolas,"Microsoft YaHei","PingFang SC","Noto Sans CJK SC",monospace;}',
     '.chsh-body pre code{background:none;border:none;padding:0;font-size:inherit;}',
-    '.chsh-body table{border-collapse:collapse;width:100%;margin:0 0 12px;font-size:0.92em;}',
-    '.chsh-body th,.chsh-body td{border:1px solid ' + th.border + ';padding:7px 10px;text-align:left;vertical-align:top;}',
+    '.chsh-body table{border-collapse:collapse;width:100%;margin:0 0 ' + g + 'px;font-size:0.92em;}',
+    '.chsh-body th,.chsh-body td{border:1px solid ' + th.border + ';padding:6px 10px;text-align:left;vertical-align:top;}',
     '.chsh-body th{background:' + th.card + ';font-weight:700;}',
     '.chsh-body tbody tr:nth-child(even){background:' + th.card + ';}',
-    '.chsh-tools{margin:8px 0 0;}',
-    '.chsh-tool{display:inline-block;background:' + th.card + ';border:1px solid ' + th.border + ';border-radius:999px;',
-    'padding:2px 9px;margin:2px 6px 2px 0;font-size:' + (fs * 0.74) + 'px;color:' + th.muted + ';}',
+    '.chsh-tools{margin:' + Math.round(g * 0.8) + 'px 0 0;}',
+    // Tool chip = vector wrench + name, same pill shape as before; the icon is
+    // inline-flex so the glyph stays optically centred with the label.
+    '.chsh-tool{display:inline-flex;align-items:center;gap:4px;background:' + th.card + ';border:1px solid ' + th.border + ';border-radius:999px;',
+    'padding:2px 9px 2px 7px;margin:2px 6px 2px 0;font-size:' + (fs * 0.74) + 'px;color:' + th.muted + ';}',
+    '.chsh-tool .chsh-ic{width:1.1em;height:1.1em;}',
     '.chsh-ph{color:' + th.muted + ';border:1px dashed ' + th.border + ';border-radius:6px;padding:0 6px;font-size:0.85em;}',
     '.chsh-img{max-width:100%;height:auto;border-radius:8px;margin:6px 0;display:block;}',
-    '.chsh-foot{margin-top:26px;padding-top:12px;border-top:1px solid ' + th.border + ';font-size:' + (fs * 0.72) + 'px;color:' + th.muted + ';line-height:1.7;}'
+    // Footer rule: 2px so the artifact's end is legible on a long image.
+    '.chsh-foot{margin-top:' + (g * 2) + 'px;padding-top:' + Math.round(g * 0.9) + 'px;border-top:2px solid ' + th.border + ';',
+    'font-size:' + (fs * 0.72) + 'px;color:' + th.muted + ';line-height:1.7;}'
   ]
   // Syntax-highlight token colors (only present on fixed palettes; auto theme
   // exports keep plain code, matching the pre-highlight look).
@@ -267,27 +291,58 @@ function exportCss (th, opt) {
   return css.join('')
 }
 
+// Role / tool icons for the export markup, drawn as inline SVG paths.
+// Why vectors and not emoji: the artifact is opened where no host is present,
+// so the glyph has to travel inside the file — emoji render as colour bitmaps
+// that differ per OS and cannot be tinted, and an icon font would need a
+// network/webfont dependency (spec #13 story 21 + 25). `viewBox` + `currentColor`
+// mean size and colour come from the concrete values exportCss embeds
+// (ADR-0002: no host variable may reach the artifact), and every icon is
+// 24×24 stroke-drawn so the set reads as one family.
+// `xmlns` is mandatory, not decoration: the PNG pipeline nests this markup
+// inside an SVG <foreignObject>, which is parsed as XML, where a nested <svg>
+// would otherwise inherit the XHTML namespace and paint nothing at all.
+const ICON_ATTRS = 'xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="chsh-ic"' +
+  ' fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"'
+const ICON_PATHS = {
+  // person: head + shoulders
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4.5 20.5c0-3.9 3.4-6.2 7.5-6.2s7.5 2.3 7.5 6.2"/>',
+  // bot: antenna + head box + two eyes
+  asst: '<path d="M12 7.1V4.9"/><circle cx="12" cy="3.7" r="1.2" fill="currentColor" stroke="none"/>' +
+    '<rect x="4" y="7.1" width="16" height="13.2" rx="3.2"/><path d="M9.2 12.3v2.4M14.8 12.3v2.4"/>',
+  // wrench: outline, drawn with strokes so it stays legible at chip size
+  tool: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>'
+}
+function chshIcon (kind) {
+  return '<svg ' + ICON_ATTRS + '>' + (ICON_PATHS[kind] || ICON_PATHS.tool) + '</svg>'
+}
+
+// Turn header: avatar chip + timestamp. One helper, because the PNG pager
+// re-emits the same header for every fragment it splits out of a long turn.
+function whoXhtml (role, ts) {
+  return '<div class="chsh-who"><span class="chsh-av chsh-av-' + role + '">' + chshIcon(role) + '</span>' +
+    (ts ? '<span class="chsh-ts">' + fmtTs(ts) + '</span>' : '') + '</div>'
+}
+
 // Per-part renderers. A turn is exported as up to three visual parts (user
 // bubble, assistant replies, tool chips); the PNG pager can place parts on
 // different pages and even split one giant reply across pages, while
 // turnXhtml (HTML export) keeps composing them exactly as before.
 function userXhtml (turn, opt) {
   if (!turn.user || !turn.user.text) return ''
-  return '<div class="chsh-user"><div class="chsh-who">👤' +
-    (turn.user.ts ? '<span class="chsh-ts">' + fmtTs(turn.user.ts) + '</span>' : '') + '</div>' +
+  return '<div class="chsh-user">' + whoXhtml('user', turn.user.ts) +
     '<div class="chsh-body">' + mdToXhtml(turn.user.text, { images: opt.images }) + '</div></div>'
 }
 
 function asstXhtml (a, opt) {
-  return '<div class="chsh-asst"><div class="chsh-who">🤖' +
-    (a.ts ? '<span class="chsh-ts">' + fmtTs(a.ts) + '</span>' : '') + '</div>' +
+  return '<div class="chsh-asst">' + whoXhtml('asst', a.ts) +
     '<div class="chsh-body">' + mdToXhtml(a.text, { images: opt.images }) + '</div></div>'
 }
 
 function toolsXhtml (turn) {
   if (!turn.tools.length) return ''
   return '<div class="chsh-tools">' + turn.tools.map(t =>
-    '<span class="chsh-tool">🔧 ' + esc(t.name) + '</span>').join('') + '</div>'
+    '<span class="chsh-tool">' + chshIcon('tool') + esc(t.name) + '</span>').join('') + '</div>'
 }
 
 // One turn → XHTML fragment (used by HTML export; the PNG pager uses parts).
@@ -720,10 +775,10 @@ function buildPages (turns, th, opt) {
       const text = f.kind === 'user' ? f.turn.user.text : f.a.text
       const ts = f.kind === 'user' ? f.turn.user.ts : f.a.ts
       const wrap = (s, first) => {
-        const who = f.kind === 'user'
-          ? '<div class="chsh-user"><div class="chsh-who">👤' + (first && ts ? '<span class="chsh-ts">' + fmtTs(ts) + '</span>' : '') + '</div><div class="chsh-body">'
-          : '<div class="chsh-asst"><div class="chsh-who">🤖' + (first && ts ? '<span class="chsh-ts">' + fmtTs(ts) + '</span>' : '') + '</div><div class="chsh-body">'
-        return who + mdToXhtml(s, { images: false }) + '</div></div>'
+        const open = f.kind === 'user'
+          ? '<div class="chsh-user">' + whoXhtml('user', first ? ts : 0) + '<div class="chsh-body">'
+          : '<div class="chsh-asst">' + whoXhtml('asst', first ? ts : 0) + '<div class="chsh-body">'
+        return open + mdToXhtml(s, { images: false }) + '</div></div>'
       }
       const slices = splitLongText(text, s => measure(wrap(s, true)) <= PAGE_MAX - 120)
       slices.forEach((s, i) => frags.push({ html: wrap(s, i === 0), h: measure(wrap(s, i === 0)) }))
@@ -882,12 +937,12 @@ function solidColor (color, over) {
 function fixedThemePalette (mode) {
   const light = {
     bg: '#ffffff', fg: '#1a1a1a', card: '#f6f6f6', border: 'rgba(0,0,0,0.14)',
-    accent: '#2563eb', muted: '#6b7280', codeBg: '#f3f4f6',
+    accent: '#2563eb', muted: '#6b7280', codeBg: '#eceff3',
     tok: { kw: '#7c3aed', str: '#16a34a', com: '#9ca3af', num: '#ea580c', fn: '#2563eb' }
   }
   const dark = {
     bg: '#1e1f22', fg: '#e6e6e6', card: '#2a2b2f', border: 'rgba(255,255,255,0.16)',
-    accent: '#60a5fa', muted: '#9ca3af', codeBg: '#26272b',
+    accent: '#60a5fa', muted: '#9ca3af', codeBg: '#2b2d33',
     tok: { kw: '#c4b5fd', str: '#86efac', com: '#6b7280', num: '#fdba74', fn: '#93c5fd' }
   }
   return mode === 'dark' ? dark : light
