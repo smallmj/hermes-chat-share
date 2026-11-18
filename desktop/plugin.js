@@ -3,8 +3,10 @@
 import {
   host, haptic, useValue, atom,
   ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA, KEYBINDS_AREA, TITLEBAR_AREAS,
-  Button, EmptyState, GlyphSpinner, MessageTextContent, Codicon,
-  usePluginI18n
+  Badge, Button, Checkbox, Codicon, Dialog, DialogContent, DialogDescription, DialogFooter,
+  DialogHeader, DialogTitle, EmptyState, ErrorState, GlyphSpinner, Input, MessageTextContent,
+  SearchField, SegmentedControl, Select, SelectContent, SelectItem, SelectTrigger,
+  SelectValue, Tip, usePluginI18n
 } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useState } from 'react'
@@ -12,7 +14,7 @@ import { useEffect, useState } from 'react'
 const PLUGIN_ID = 'hermes-chat-share'
 // Keep in sync with plugin.yaml. Rendered as a tiny badge in the page header
 // so "did my update actually load?" is always answerable at a glance.
-const PLUGIN_VERSION = '1.1.8'
+const PLUGIN_VERSION = '1.2.0'
 const ROUTE = '/chat-share'
 
 // ==== CORE START ==== (dependency-free export core; mirrored by the test harness)
@@ -165,11 +167,13 @@ function fmtTs (ts) {
 }
 
 // Read the app theme once, as concrete values passed into the export CSS.
+// Probe targets are the `--dt-*` family the host actually paints per theme
+// (ADR-0002): the bare names --card/--border/--accent/--muted-foreground/--muted
+// do not exist on the host at all, so the v1.1.8 probe resolved nothing and
+// "follow the app theme" always exported the light fallback. Mechanism is
+// unchanged — a hidden element whose inline var() the browser resolves through
+// the token chain to a computed rgba, then solidified into the artifact.
 function snapshotTheme () {
-  // CSS custom props on :root are declared as unresolved chains
-  // (`--background: var(--dt-background)`), so getPropertyValue returns the
-  // token, not a color. Probe REAL elements with inline var() styles and let
-  // the browser resolve the chain to a computed rgba().
   const probe = css => {
     const d = document.createElement('div')
     d.style.cssText = 'position:fixed;left:-9999px;top:0;width:8px;height:8px;border-style:solid;border-width:1px;' + css
@@ -179,11 +183,11 @@ function snapshotTheme () {
     d.remove()
     return r
   }
-  const page = probe('background:var(--background);color:var(--foreground);border-color:var(--border)')
-  const cardP = probe('background:var(--card);border-color:var(--border)')
-  const accentP = probe('background:var(--accent)')
-  const mutedP = probe('color:var(--muted-foreground)')
-  const codeP = probe('background:var(--muted)')
+  const page = probe('background:var(--dt-background);color:var(--dt-foreground);border-color:var(--dt-border)')
+  const cardP = probe('background:var(--dt-card);border-color:var(--dt-border)')
+  const accentP = probe('background:var(--dt-accent)')
+  const mutedP = probe('color:var(--dt-muted-foreground)')
+  const codeP = probe('background:var(--dt-muted)')
   const resolve = (c, fb, base) => {
     const p = parseCssRgba(c)
     if (!p || p.a === 0) return fb
@@ -204,6 +208,10 @@ function snapshotTheme () {
 
 function exportCss (th, opt) {
   const fs = (opt.scale || 1) * 15
+  // Vertical rhythm is scale-driven, never hard pixel: g is one rhythm step
+  // (9px at scale 1, 11px at scale 1.2). Picking a bigger 字号 keeps the same
+  // proportional air instead of crowding the text at a fixed spacing.
+  const g = Math.round(fs * 0.6)
   // MUST join to a STRING before returning. Returning the bare array made
   // every call site string-concat comma-join the rules (Array toString),
   // corrupting the stylesheet — items 1/2 are halves of ONE rule, so the
@@ -213,43 +221,61 @@ function exportCss (th, opt) {
     '.chsh-wrap{box-sizing:border-box;font-family:-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC","Source Han Sans SC",sans-serif;',
     'font-size:' + fs + 'px;line-height:1.6;color:' + th.fg + ';background:' + th.bg + ';word-break:break-word;}',
     '.chsh-wrap *{box-sizing:border-box;margin:0;padding:0;}',
-    '.chsh-pad{padding:28px 26px;}',
-    '.chsh-title{font-size:' + (fs * 2) + 'px;font-weight:700;line-height:1.25;margin-bottom:10px;letter-spacing:-0.01em;}',
-    '.chsh-meta{font-size:' + (fs * 0.78) + 'px;color:' + th.muted + ';padding-bottom:16px;border-bottom:1px solid ' + th.border + ';margin-bottom:22px;}',
+    '.chsh-pad{padding:' + Math.round(fs * 1.6) + 'px ' + Math.round(fs * 1.45) + 'px;}',
+    '.chsh-title{font-size:' + (fs * 2) + 'px;font-weight:700;line-height:1.2;margin-bottom:' + Math.round(g * 0.7) + 'px;letter-spacing:-0.015em;}',
+    '.chsh-meta{font-size:' + (fs * 0.78) + 'px;color:' + th.muted + ';padding-bottom:' + g + 'px;border-bottom:1px solid ' + th.border + ';margin-bottom:' + (g * 2) + 'px;}',
     // Turn header — a real document-style heading, not a muted caption.
-    '.chsh-turn{margin:0 0 26px;page-break-inside:avoid;}',
-    '.chsh-who{font-size:' + (fs * 1.06) + 'px;font-weight:700;color:' + th.fg + ';margin:0 0 8px;display:flex;align-items:baseline;}',
-    '.chsh-ts{font-weight:400;font-size:' + (fs * 0.74) + 'px;color:' + th.muted + ';margin-left:8px;}',
-    '.chsh-user .chsh-body{background:' + th.card + ';border:1px solid ' + th.border + ';border-radius:12px;padding:12px 14px;}',
-    '.chsh-asst{margin-top:12px;}',
+    '.chsh-turn{margin:0 0 ' + (g * 2) + 'px;page-break-inside:avoid;}',
+    '.chsh-who{font-size:' + (fs * 1.06) + 'px;font-weight:700;color:' + th.fg + ';margin:0 0 ' + Math.round(g * 0.6) + 'px;display:flex;align-items:center;gap:' + Math.round(g * 0.7) + 'px;}',
+    // Avatar chip: the vector icon sits in a small round token of its own,
+    // tinted by embedded values (never a host variable — ADR-0002).
+    '.chsh-av{display:inline-flex;align-items:center;justify-content:center;flex:none;width:1.7em;height:1.7em;border-radius:50%;',
+    'border:1px solid ' + th.border + ';background:' + th.card + ';color:' + th.fg + ';}',
+    '.chsh-ic{display:block;width:1.05em;height:1.05em;}',
+    '.chsh-ts{font-weight:400;font-size:' + (fs * 0.74) + 'px;color:' + th.muted + ';}',
+    // User bubble — a light, small-radius block with a narrow indent, so a
+    // long PNG reads as a document rather than a stack of wide grey slabs.
+    '.chsh-user .chsh-body{background:' + th.card + ';border:1px solid ' + th.border + ';border-radius:8px;',
+    'padding:' + Math.round(fs * 0.6) + 'px ' + Math.round(fs * 0.8) + 'px;margin:0 ' + g + 'px;}',
+    '.chsh-user .chsh-body>p:last-child{margin-bottom:0;}',
+    '.chsh-asst{margin-top:' + g + 'px;}',
     '.chsh-asst .chsh-body>p:first-child{margin-top:0;}',
-    '.chsh-body p{margin:0 0 12px;line-height:1.7;}',
-    '.chsh-body h1,.chsh-body h2,.chsh-body h3,.chsh-body h4{margin:18px 0 10px;line-height:1.35;font-weight:700;}',
-    '.chsh-body h1{font-size:1.5em;}.chsh-body h2{font-size:1.3em;}.chsh-body h3{font-size:1.15em;}.chsh-body h4{font-size:1em;}',
+    '.chsh-body p{margin:0 0 ' + g + 'px;line-height:1.62;}',
+    '.chsh-body h1,.chsh-body h2,.chsh-body h3,.chsh-body h4{margin:' + Math.round(g * 1.5) + 'px 0 ' + Math.round(g * 0.8) + 'px;line-height:1.3;font-weight:700;}',
+    '.chsh-body h1{font-size:1.45em;}.chsh-body h2{font-size:1.28em;}.chsh-body h3{font-size:1.12em;}.chsh-body h4{font-size:1em;}',
     '.chsh-body h1:first-child,.chsh-body h2:first-child,.chsh-body h3:first-child,.chsh-body h4:first-child{margin-top:0;}',
-    '.chsh-body ul,.chsh-body ol{margin:0 0 12px;padding-left:1.5em;}',
-    '.chsh-body li{margin:4px 0;}',
-    '.chsh-body li>p{margin:0 0 4px;}',
-    '.chsh-body blockquote{border-left:3px solid ' + th.accent + ';background:' + th.card + ';padding:8px 14px;margin:0 0 12px;border-radius:0 8px 8px 0;color:' + th.muted + ';}',
+    '.chsh-body ul,.chsh-body ol{margin:0 0 ' + g + 'px;padding-left:1.4em;}',
+    '.chsh-body li{margin:2px 0;}',
+    '.chsh-body li>p{margin:0 0 2px;}',
+    '.chsh-body blockquote{border-left:3px solid ' + th.accent + ';background:' + th.codeBg + ';padding:6px 12px;',
+    'margin:0 0 ' + g + 'px;border-radius:0 6px 6px 0;color:' + th.fg + ';}',
     '.chsh-body blockquote p{margin:0 0 4px;}',
-    '.chsh-body hr{border:none;border-top:1px solid ' + th.border + ';margin:12px 0;}',
+    '.chsh-body blockquote p:last-child{margin-bottom:0;}',
+    '.chsh-body hr{border:none;border-top:1px solid ' + th.border + ';margin:' + g + 'px 0;}',
     '.chsh-body a{color:' + th.accent + ';text-decoration:none;}',
-    '.chsh-body code{background:' + th.codeBg + ';border:1px solid ' + th.border + ';border-radius:4px;padding:1px 5px;font-size:0.9em;',
+    // Inline code keeps its own (deeper) tint plus a hairline, so a `code` span
+    // reads as an object and not as a font change.
+    '.chsh-body code{background:' + th.codeBg + ';border:1px solid ' + th.border + ';border-radius:5px;padding:2px 5px;font-size:0.9em;',
     'font-family:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Consolas,"Microsoft YaHei","PingFang SC","Noto Sans CJK SC",monospace;}',
-    '.chsh-body pre{background:' + th.codeBg + ';border:1px solid ' + th.border + ';border-radius:10px;padding:12px 14px;margin:0 0 10px;',
+    '.chsh-body pre{background:' + th.codeBg + ';border:1px solid ' + th.border + ';border-radius:8px;padding:10px 12px;margin:0 0 ' + g + 'px;',
     'white-space:pre-wrap;font-size:0.86em;line-height:1.5;',
     'font-family:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Consolas,"Microsoft YaHei","PingFang SC","Noto Sans CJK SC",monospace;}',
     '.chsh-body pre code{background:none;border:none;padding:0;font-size:inherit;}',
-    '.chsh-body table{border-collapse:collapse;width:100%;margin:0 0 12px;font-size:0.92em;}',
-    '.chsh-body th,.chsh-body td{border:1px solid ' + th.border + ';padding:7px 10px;text-align:left;vertical-align:top;}',
+    '.chsh-body table{border-collapse:collapse;width:100%;margin:0 0 ' + g + 'px;font-size:0.92em;}',
+    '.chsh-body th,.chsh-body td{border:1px solid ' + th.border + ';padding:6px 10px;text-align:left;vertical-align:top;}',
     '.chsh-body th{background:' + th.card + ';font-weight:700;}',
     '.chsh-body tbody tr:nth-child(even){background:' + th.card + ';}',
-    '.chsh-tools{margin:8px 0 0;}',
-    '.chsh-tool{display:inline-block;background:' + th.card + ';border:1px solid ' + th.border + ';border-radius:999px;',
-    'padding:2px 9px;margin:2px 6px 2px 0;font-size:' + (fs * 0.74) + 'px;color:' + th.muted + ';}',
+    '.chsh-tools{margin:' + Math.round(g * 0.8) + 'px 0 0;}',
+    // Tool chip = vector wrench + name, same pill shape as before; the icon is
+    // inline-flex so the glyph stays optically centred with the label.
+    '.chsh-tool{display:inline-flex;align-items:center;gap:4px;background:' + th.card + ';border:1px solid ' + th.border + ';border-radius:999px;',
+    'padding:2px 9px 2px 7px;margin:2px 6px 2px 0;font-size:' + (fs * 0.74) + 'px;color:' + th.muted + ';}',
+    '.chsh-tool .chsh-ic{width:1.1em;height:1.1em;}',
     '.chsh-ph{color:' + th.muted + ';border:1px dashed ' + th.border + ';border-radius:6px;padding:0 6px;font-size:0.85em;}',
     '.chsh-img{max-width:100%;height:auto;border-radius:8px;margin:6px 0;display:block;}',
-    '.chsh-foot{margin-top:26px;padding-top:12px;border-top:1px solid ' + th.border + ';font-size:' + (fs * 0.72) + 'px;color:' + th.muted + ';line-height:1.7;}'
+    // Footer rule: 2px so the artifact's end is legible on a long image.
+    '.chsh-foot{margin-top:' + (g * 2) + 'px;padding-top:' + Math.round(g * 0.9) + 'px;border-top:2px solid ' + th.border + ';',
+    'font-size:' + (fs * 0.72) + 'px;color:' + th.muted + ';line-height:1.7;}'
   ]
   // Syntax-highlight token colors (only present on fixed palettes; auto theme
   // exports keep plain code, matching the pre-highlight look).
@@ -265,27 +291,65 @@ function exportCss (th, opt) {
   return css.join('')
 }
 
+// Role / tool icons for the export markup, drawn as inline SVG paths.
+// Why vectors and not emoji: the artifact is opened where no host is present,
+// so the glyph has to travel inside the file — emoji render as colour bitmaps
+// that differ per OS and cannot be tinted, and an icon font would need a
+// network/webfont dependency (spec #13 story 21 + 25). `viewBox` + `currentColor`
+// mean size and colour come from the concrete values exportCss embeds
+// (ADR-0002: no host variable may reach the artifact), and every icon is
+// 24×24 stroke-drawn so the set reads as one family.
+// `xmlns` is mandatory, not decoration: the PNG pipeline nests this markup
+// inside an SVG <foreignObject>, which is parsed as XML, where a nested <svg>
+// would otherwise inherit the XHTML namespace and paint nothing at all.
+const ICON_ATTRS = 'xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="chsh-ic"' +
+  ' fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"'
+const ICON_PATHS = {
+  // person: head + shoulders
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4.5 20.5c0-3.9 3.4-6.2 7.5-6.2s7.5 2.3 7.5 6.2"/>',
+  // bot: antenna + head box + two eyes
+  asst: '<path d="M12 7.1V4.9"/><circle cx="12" cy="3.7" r="1.2" fill="currentColor" stroke="none"/>' +
+    '<rect x="4" y="7.1" width="16" height="13.2" rx="3.2"/><path d="M9.2 12.3v2.4M14.8 12.3v2.4"/>',
+  // wrench: outline, drawn with strokes so it stays legible at chip size
+  tool: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>'
+}
+// `ICON_PATHS.tool` is deliberately NOT the fallback: callers only ever pass
+// user/asst/tool, so an unknown kind is a typo, and borrowing the wrench
+// would hide it (#19 review item 1). Unknown → neutral dot: still a valid
+// inline SVG, but obviously not a role glyph.
+const NEUTRAL_DOT = '<circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/>'
+function chshIcon (kind) {
+  return '<svg ' + ICON_ATTRS + '>' + (ICON_PATHS[kind] || NEUTRAL_DOT) + '</svg>'
+}
+
+// Turn header: avatar chip + timestamp. One helper, because the PNG pager
+// re-emits the same header for every fragment it splits out of a long turn.
+// The chip carries exactly the one styled class — role suffixes had no rules
+// in exportCss and only invited dead-CSS drift (#19 item 2).
+function whoXhtml (role, ts) {
+  return '<div class="chsh-who"><span class="chsh-av">' + chshIcon(role) + '</span>' +
+    (ts ? '<span class="chsh-ts">' + fmtTs(ts) + '</span>' : '') + '</div>'
+}
+
 // Per-part renderers. A turn is exported as up to three visual parts (user
 // bubble, assistant replies, tool chips); the PNG pager can place parts on
 // different pages and even split one giant reply across pages, while
 // turnXhtml (HTML export) keeps composing them exactly as before.
 function userXhtml (turn, opt) {
   if (!turn.user || !turn.user.text) return ''
-  return '<div class="chsh-user"><div class="chsh-who">👤' +
-    (turn.user.ts ? '<span class="chsh-ts">' + fmtTs(turn.user.ts) + '</span>' : '') + '</div>' +
+  return '<div class="chsh-user">' + whoXhtml('user', turn.user.ts) +
     '<div class="chsh-body">' + mdToXhtml(turn.user.text, { images: opt.images }) + '</div></div>'
 }
 
 function asstXhtml (a, opt) {
-  return '<div class="chsh-asst"><div class="chsh-who">🤖' +
-    (a.ts ? '<span class="chsh-ts">' + fmtTs(a.ts) + '</span>' : '') + '</div>' +
+  return '<div class="chsh-asst">' + whoXhtml('asst', a.ts) +
     '<div class="chsh-body">' + mdToXhtml(a.text, { images: opt.images }) + '</div></div>'
 }
 
 function toolsXhtml (turn) {
   if (!turn.tools.length) return ''
   return '<div class="chsh-tools">' + turn.tools.map(t =>
-    '<span class="chsh-tool">🔧 ' + esc(t.name) + '</span>').join('') + '</div>'
+    '<span class="chsh-tool">' + chshIcon('tool') + esc(t.name) + '</span>').join('') + '</div>'
 }
 
 // One turn → XHTML fragment (used by HTML export; the PNG pager uses parts).
@@ -718,10 +782,10 @@ function buildPages (turns, th, opt) {
       const text = f.kind === 'user' ? f.turn.user.text : f.a.text
       const ts = f.kind === 'user' ? f.turn.user.ts : f.a.ts
       const wrap = (s, first) => {
-        const who = f.kind === 'user'
-          ? '<div class="chsh-user"><div class="chsh-who">👤' + (first && ts ? '<span class="chsh-ts">' + fmtTs(ts) + '</span>' : '') + '</div><div class="chsh-body">'
-          : '<div class="chsh-asst"><div class="chsh-who">🤖' + (first && ts ? '<span class="chsh-ts">' + fmtTs(ts) + '</span>' : '') + '</div><div class="chsh-body">'
-        return who + mdToXhtml(s, { images: false }) + '</div></div>'
+        const open = f.kind === 'user'
+          ? '<div class="chsh-user">' + whoXhtml('user', first ? ts : 0) + '<div class="chsh-body">'
+          : '<div class="chsh-asst">' + whoXhtml('asst', first ? ts : 0) + '<div class="chsh-body">'
+        return open + mdToXhtml(s, { images: false }) + '</div></div>'
       }
       const slices = splitLongText(text, s => measure(wrap(s, true)) <= PAGE_MAX - 120)
       slices.forEach((s, i) => frags.push({ html: wrap(s, i === 0), h: measure(wrap(s, i === 0)) }))
@@ -861,6 +925,16 @@ function parseCssRgba (s) {
     const a = rgb[4] == null ? 1 : (String(rgb[4]).endsWith('%') ? parseFloat(rgb[4]) / 100 : parseFloat(rgb[4]))
     return { r: +rgb[1], g: +rgb[2], b: +rgb[3], a: Number.isFinite(a) ? Math.min(1, Math.max(0, a)) : 1 }
   }
+  // getComputedStyle serializes color-mix / chain results in the sRGB space as
+  // `color(srgb r g b / a)` with 0..1 floats (Chromium ≥ the app's Electron).
+  // Missing this made the auto-theme probe reject real dark-theme values and
+  // fall back to the light palette — light bg + real dark blocks in one export.
+  const srgb = /^color\(\s*srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+))?\s*\)$/i.exec(str)
+  if (srgb) {
+    const c255 = v => Math.round(Math.min(255, Math.max(0, parseFloat(v) * 255)))
+    const a = srgb[4] == null ? 1 : parseFloat(srgb[4])
+    return { r: c255(srgb[1]), g: c255(srgb[2]), b: c255(srgb[3]), a: Number.isFinite(a) ? Math.min(1, Math.max(0, a)) : 1 }
+  }
   return null
 }
 
@@ -880,12 +954,12 @@ function solidColor (color, over) {
 function fixedThemePalette (mode) {
   const light = {
     bg: '#ffffff', fg: '#1a1a1a', card: '#f6f6f6', border: 'rgba(0,0,0,0.14)',
-    accent: '#2563eb', muted: '#6b7280', codeBg: '#f3f4f6',
+    accent: '#2563eb', muted: '#6b7280', codeBg: '#eceff3',
     tok: { kw: '#7c3aed', str: '#16a34a', com: '#9ca3af', num: '#ea580c', fn: '#2563eb' }
   }
   const dark = {
     bg: '#1e1f22', fg: '#e6e6e6', card: '#2a2b2f', border: 'rgba(255,255,255,0.16)',
-    accent: '#60a5fa', muted: '#9ca3af', codeBg: '#26272b',
+    accent: '#60a5fa', muted: '#9ca3af', codeBg: '#2b2d33',
     tok: { kw: '#c4b5fd', str: '#86efac', com: '#6b7280', num: '#fdba74', fn: '#93c5fd' }
   }
   return mode === 'dark' ? dark : light
@@ -1244,29 +1318,20 @@ function AskModal () {
     } catch (err) { fail(err) }
     close()
   }
-  // Theme tokens can carry alpha (macOS window vibrancy) — flatten every
-  // paint to a solid color so the dialog never blends into page text.
-  const th = snapshotTheme(document.documentElement)
-  const pageBg = solidColor(th.bg, isDarkColor(th.bg) ? '#000000' : '#ffffff')
-  const dark = isDarkColor(pageBg)
-  const cardBg = solidColor(solidColor(th.card, pageBg), dark ? '#000000' : '#ffffff')
-  return jsx('div', {
-    className: 'fixed inset-0 flex items-center justify-center',
-    style: { background: 'rgba(0,0,0,0.5)', zIndex: 2147483000 },
-    onClick: close,
-    children: jsxs('div', {
-      className: 'p-5 mx-4 w-full max-w-[420px] flex flex-col gap-3',
-      style: {
-        background: cardBg, color: solidColor(th.fg, cardBg),
-        border: '1px solid ' + solidColor(th.border, cardBg), borderRadius: 12,
-        boxShadow: '0 12px 40px rgba(0,0,0,0.45)'
-      },
-      onClick: e => e.stopPropagation(),
+  // Host Dialog group (spec #13): overlay, portal, focus trap, Esc-to-close
+  // and the X all come from the host's own dialog skin. The pane must not
+  // hand-roll scrim/card colors off a snapshot — that palette went stale on
+  // theme change and flattened real theme tokens into light-mode fallbacks.
+  return jsx(Dialog, {
+    open: true,
+    onOpenChange: open => { if (!open) close() },
+    children: jsxs(DialogContent, {
+      fitContent: true,
       children: [
-        jsx('div', { className: 'font-medium text-sm', children: t('askTitle') }),
-        jsx('div', { className: 'text-xs leading-relaxed', style: { color: solidColor(th.muted, cardBg) }, children: ask.reason }),
-        jsxs('div', { className: 'flex justify-end gap-2 mt-1', children: [
-          jsx(Button, { size: 'sm', variant: 'text', onClick: close, children: t('btnCancel') }),
+        jsx(DialogHeader, { children: jsx(DialogTitle, { children: t('askTitle') }) }),
+        jsx(DialogDescription, { children: ask.reason }),
+        jsxs(DialogFooter, { children: [
+          jsx(Button, { size: 'sm', variant: 'outline', onClick: close, children: t('btnCancel') }),
           jsx(Button, { size: 'sm', onClick: () => void grab(), children: t('btnDownload') })
         ] })
       ]
@@ -1383,6 +1448,7 @@ function Gutter ({ turns }) {
   const activeId = useValue(activeAtom)
   const drag = useValue(dragAtom)
   const sel = useValue(selAtom)
+  const [hoverId, setHoverId] = useState(null) // hover feedback for ticks (see below)
   if (turns.length < 2) return null
   const gap = turns.length > 40 ? 1 : 2
   const dragStart = (id, e) => {
@@ -1406,21 +1472,34 @@ function Gutter ({ turns }) {
   }
   const inDrag = id => drag && id >= Math.min(drag.fromId, drag.toId) && id <= Math.max(drag.fromId, drag.toId)
   return jsx('div', {
-    className: 'absolute top-3 bottom-3 right-0 w-[10px] flex flex-col z-30',
-    style: { gap: gap + 'px' },
+    // The rail geometry goes inline: an arbitrary-value class like a px width
+    // is never compiled for a runtime plugin (ADR-0001), and the old one was
+    // part of why the gutter rendered invisible.
+    className: 'absolute top-3 bottom-3 right-0 flex flex-col z-30',
+    style: { width: '10px', gap: gap + 'px' },
     children: turns.map(x => {
       const snippet = (((x.user && x.user.text) || (x.asst[0] && x.asst[0].text) || '') + '').replace(/\s+/g, ' ').slice(0, 48)
       const highlighted = inDrag(x.id)
+      const isActive = x.id === activeId
+      // Hover bumps a resting tick to the strongest stroke tier; the active
+      // turn and the drag band paint with the accent token. State-driven (not
+      // a hover: class) because inline paints always outrank hover classes.
+      const hover = x.id === hoverId
+      const paint = highlighted || isActive ? 'var(--ui-accent)' : (hover ? 'var(--ui-stroke-primary)' : 'var(--ui-stroke-secondary)')
       return jsx('div', {
         role: 'button',
         title: (x.id + 1) + '. ' + snippet,
         onPointerDown: e => dragStart(x.id, e),
         onPointerMove: () => dragMove(x.id),
         onPointerUp: () => dragEnd(x.id),
-        className: 'flex-1 min-h-[2px] rounded-full',
+        onPointerEnter: () => setHoverId(x.id),
+        onPointerLeave: () => setHoverId(cur => (cur === x.id ? null : cur)),
+        className: 'flex-1 rounded-full',
         style: {
-          background: highlighted ? 'var(--accent)' : (x.id === activeId ? 'var(--accent)' : 'var(--border)'),
+          minHeight: '2px',
+          background: paint,
           opacity: highlighted ? 0.55 : 1,
+          transition: 'background-color 120ms',
           cursor: 'pointer',
           touchAction: 'none'
         }
@@ -1438,34 +1517,62 @@ function TurnRow ({ turn, checked, onToggle, expanded, onExpand, active }) {
   const collapsible = mid > 0 || turn.tools.length > 0
   return jsxs('div', {
     ref: el => { if (el) rowEls.set(turn.id, el); else rowEls.delete(turn.id) },
-    className: 'flex gap-3 py-3 border-b border-(--border)',
-    style: active ? { boxShadow: 'inset 0 0 0 2px var(--accent)', borderRadius: 10 } : undefined,
+    className: 'flex gap-3 py-3',
+    style: {
+      borderBottom: '1px solid var(--ui-stroke-tertiary)',
+      // Focused turn (search jump / gutter click) gets a visible accent ring.
+      ...(active ? { boxShadow: 'inset 0 0 0 2px var(--ui-accent)', borderRadius: 'var(--radius-lg)' } : null)
+    },
     children: [
-      jsx('input', {
-        type: 'checkbox', className: 'mt-2 shrink-0 accent-(--accent)',
-        checked, onChange: () => onToggle(turn.id)
+      // Host Checkbox (Radix): the pane never paints a native checkbox — the
+      // UA box takes no theme accent and its only focus cue is the UA outline;
+      // Checkbox ships compiled focus-visible ring/border classes (story 14, #19).
+      jsx(Checkbox, {
+        checked, onCheckedChange: () => onToggle(turn.id),
+        'aria-label': t('toggleTurn', turn.id + 1),
+        className: 'mt-2 shrink-0'
       }),
       jsxs('div', { className: 'min-w-0 flex-1 flex flex-col gap-2', children: [
-        turn.user && turn.user.text ? jsxs('div', { className: 'rounded-xl border border-(--border) bg-(--card) px-3 py-2', children: [
-          jsxs('div', { className: 'text-xs text-(--muted-foreground) mb-1 flex gap-2', children: [
-            jsx('span', { className: 'font-medium', children: t('labelUser') }),
-            turn.user.ts ? jsx('span', { children: fmtTs(turn.user.ts) }) : null
-          ] }),
-          jsx(MessageTextContent, { text: turn.user.text })
-        ] }) : null,
+        turn.user && turn.user.text ? jsxs('div', {
+          className: 'px-3 py-2',
+          style: { border: '1px solid var(--ui-stroke-secondary)', background: 'var(--ui-bg-card)', borderRadius: 'var(--radius-xl)' },
+          children: [
+            jsxs('div', { className: 'text-xs mb-1 flex gap-2', style: { color: 'var(--ui-text-tertiary)' }, children: [
+              jsx('span', { className: 'font-medium', children: t('labelUser') }),
+              turn.user.ts ? jsx('span', { children: fmtTs(turn.user.ts) }) : null
+            ] }),
+            jsx(MessageTextContent, { text: turn.user.text })
+          ]
+        }) : null,
         showAsst.map((a, k) => jsxs('div', { className: 'min-w-0', children: [
-          jsxs('div', { className: 'text-xs text-(--muted-foreground) mb-1 mt-2 flex gap-2', children: [
+          jsxs('div', { className: 'text-xs mb-1 mt-2 flex gap-2', style: { color: 'var(--ui-text-tertiary)' }, children: [
             jsx('span', { className: 'font-medium', children: t('labelAssistant') }),
             a.ts ? jsx('span', { children: fmtTs(a.ts) }) : null
           ] }),
           jsx('div', { className: 'min-w-0 overflow-hidden', children: jsx(MessageTextContent, { text: a.text }) })
         ] }, k)),
         showTools ? jsx('div', { className: 'flex flex-wrap gap-1 pt-1', children: turn.tools.map((x, k) =>
-          jsx('span', { className: 'text-[11px] px-2 py-0.5 rounded-full border border-(--border) text-(--muted-foreground)', children: '🔧 ' + x.name }, k)) }) : null,
+          jsxs(Badge, { variant: 'outline', size: 'xs', children: [jsx(Codicon, { name: 'tools', size: '0.75rem' }), x.name] }, k)) }) : null,
         collapsible ? jsx(Button, { size: 'xs', variant: 'text', onClick: () => onExpand(turn.id), children: expanded ? t('collapse') : t('expand', mid, turn.tools.length) }) : null
       ] })
     ]
   })
+}
+
+// One local builder for the toolbar's option selects (width / font). These
+// two Select structures were copy-pasted; #19 review item 3 asked for one.
+// Only the label, trigger width and the item set differ.
+function OptionSelect ({ label, value, triggerWidth, items, onValue }) {
+  return jsxs('span', { className: 'flex items-center gap-1.5', children: [
+    jsx('span', { className: 'text-xs whitespace-nowrap', style: { color: 'var(--ui-text-tertiary)' }, children: label }),
+    jsxs(Select, {
+      value, onValueChange: onValue,
+      children: [
+        jsx(SelectTrigger, { size: 'xs', style: { width: triggerWidth, flex: 'none' }, children: jsx(SelectValue, {}) }),
+        jsx(SelectContent, { children: items.map(it => jsx(SelectItem, { value: it.value, children: it.label }, it.value)) })
+      ]
+    })
+  ] })
 }
 
 function Toolbar () {
@@ -1495,108 +1602,118 @@ function Toolbar () {
     jumpToTurn(cur.ids[at], true)
   }
   return jsxs('div', {
-    className: 'border-b border-(--border) sticky top-0 bg-(--background) z-10 flex flex-col gap-1.5 px-4 py-2',
+    // Sticky toolbar needs an OPAQUE paint (inline --ui-bg-chrome, never a
+    // class — plugin classes are not compiled): scrolling turns must not show
+    // through the header.
+    className: 'sticky top-0 z-10 flex flex-col gap-1.5 px-4 py-2',
+    style: { background: 'var(--ui-bg-chrome)', borderBottom: '1px solid var(--ui-stroke-tertiary)' },
     children: [
       // One visual system: groups separated by hairline dividers (Divider),
       // everything left-aligned except the export row's trailing actions.
       // flex-wrap keeps narrow windows flowing instead of clipping.
       // Row 1: selection group | search group.
       jsxs('div', { className: 'flex items-center gap-x-2.5 gap-y-1 flex-wrap min-w-0', children: [
-        jsx('span', { className: 'text-sm text-(--muted-foreground) whitespace-nowrap', children: t('selCount', selected.length, turns.length) }),
+        jsx('span', { className: 'text-sm whitespace-nowrap', style: { color: 'var(--ui-text-secondary)' }, children: t('selCount', selected.length, turns.length) }),
         jsx(Button, { size: 'xs', variant: 'text', onClick: () => setSel(null), children: t('selectAll') }),
         jsx(Button, { size: 'xs', variant: 'text', onClick: () => setSel([]), children: t('clearSel') }),
         jsx(Button, { size: 'xs', variant: 'text', onClick: () => setSel(turns.filter(x => !sel || !sel.has(x.id)).map(x => x.id)), children: t('invertSel') }),
         jsx(Divider, {}),
-        jsx('input', {
-          className: 'text-xs rounded-md border border-(--border) bg-transparent px-2 py-1 text-(--foreground) min-w-[160px]',
-          style: { width: 'min(240px, 40vw)' }, placeholder: t('searchPh'), value: q,
-          onChange: e => setQ(e.target.value),
+        jsx('span', { className: 'shrink-0', style: { width: 'min(240px, 40vw)' }, children: jsx(SearchField, {
+          variant: 'box', placeholder: t('searchPh'), value: q,
+          containerClassName: 'w-full',
+          onChange: setQ,
           onKeyDown: e => { if (e.key === 'Enter') { e.preventDefault(); step(e.shiftKey ? -1 : 1) } }
-        }),
-        jsx('span', { className: 'text-xs text-(--muted-foreground) shrink-0 text-center whitespace-nowrap', style: { width: 46 }, children: q.trim() ? (nav.at + 1) + '/' + nav.ids.length : '' }),
-        jsx(Button, { size: 'xs', variant: 'text', onClick: () => step(-1), children: '↑' }),
-        jsx(Button, { size: 'xs', variant: 'text', onClick: () => step(1), children: '↓' })
+        }) }),
+        jsx('span', { className: 'text-xs shrink-0 text-center whitespace-nowrap', style: { width: 46, color: 'var(--ui-text-tertiary)' }, children: q.trim() ? (nav.at + 1) + '/' + nav.ids.length : '' }),
+        jsx(Button, { size: 'icon-xs', variant: 'ghost', 'aria-label': t('searchPrev'), onClick: () => step(-1), children: jsx(Codicon, { name: 'arrow-up', size: '0.875rem' }) }),
+        jsx(Button, { size: 'icon-xs', variant: 'ghost', 'aria-label': t('searchNext'), onClick: () => step(1), children: jsx(Codicon, { name: 'arrow-down', size: '0.875rem' }) })
       ] }),
       // Row 2: layout options | content toggles.
       jsxs('div', { className: 'flex items-center gap-x-2.5 gap-y-1 flex-wrap', children: [
+        jsx(OptionSelect, {
+          label: t('widthL'), value: String(opt.width), triggerWidth: 104,
+          items: [680, 880, 1080].map(w => ({ value: String(w), label: t('widthN', w) })),
+          onValue: v => setOpt({ width: Number(v) })
+        }),
+        jsx(OptionSelect, {
+          label: t('fontL'), value: String(opt.scale), triggerWidth: 112,
+          items: [0.85, 1, 1.2].map(s => ({ value: String(s), label: t('fontN', Math.round(15 * s)) })),
+          onValue: v => setOpt({ scale: Number(v) })
+        }),
         jsxs('span', { className: 'flex items-center gap-1.5', children: [
-          jsx('span', { className: 'text-xs text-(--muted-foreground) whitespace-nowrap', children: t('widthL') }),
-          jsx('select', {
-            className: 'text-xs rounded-md border border-(--border) bg-transparent px-1.5 py-1 text-(--foreground)',
-            value: String(opt.width), onChange: e => setOpt({ width: Number(e.target.value) }),
-            children: [680, 880, 1080].map(w => jsx('option', { value: String(w), children: t('widthN', w) }, w))
-          })
-        ] }),
-        jsxs('span', { className: 'flex items-center gap-1.5', children: [
-          jsx('span', { className: 'text-xs text-(--muted-foreground) whitespace-nowrap', children: t('fontL') }),
-          jsx('select', {
-            className: 'text-xs rounded-md border border-(--border) bg-transparent px-1.5 py-1 text-(--foreground)',
-            value: String(opt.scale), onChange: e => setOpt({ scale: Number(e.target.value) }),
-            children: [0.85, 1, 1.2].map(s => jsx('option', { value: String(s), children: t('fontN', Math.round(15 * s)) }, s))
-          })
-        ] }),
-        jsxs('span', { className: 'flex items-center gap-1.5', children: [
-          jsx('span', { className: 'text-xs text-(--muted-foreground) whitespace-nowrap', children: t('themeL') }),
-          jsx('select', {
-            className: 'text-xs rounded-md border border-(--border) bg-transparent px-1.5 py-1 text-(--foreground)',
-            value: opt.theme || 'auto', onChange: e => setOpt({ theme: e.target.value }),
-            children: ['auto', 'light', 'dark'].map(m => jsx('option', { value: m, children: t('themeM', m) }, m))
+          jsx('span', { className: 'text-xs whitespace-nowrap', style: { color: 'var(--ui-text-tertiary)' }, children: t('themeL') }),
+          // Theme tri-state as a host segmented control — WYSIWYG track, and
+          // `sizing:content` keeps the longest zh option ("跟随应用") on one line.
+          jsx(SegmentedControl, {
+            value: opt.theme || 'auto', onChange: v => setOpt({ theme: v }), sizing: 'content',
+            options: ['auto', 'light', 'dark'].map(m => ({ id: m, label: t('themeM', m) }))
           })
         ] }),
         jsx(Divider, {}),
-        jsx('label', {
-          className: 'flex items-center gap-1.5 text-xs text-(--foreground) cursor-pointer select-none whitespace-nowrap',
+        // One pattern for all three content toggles (story 14, #19): the host
+        // Checkbox is the control (compiled focus-visible ring, keyboard space),
+        // the wrapper span keeps click-anywhere-on-label behavior — the
+        // checkbox stops its click from bubbling so a toggle never fires twice.
+        jsxs('span', {
+          className: 'flex items-center gap-1.5 text-xs cursor-pointer select-none whitespace-nowrap',
+          onClick: () => setOpt({ meta: opt.meta === false }),
           children: [
-            jsx('input', {
-              type: 'checkbox', checked: opt.meta !== false,
-              onChange: () => setOpt({ meta: opt.meta === false }),
-              className: 'size-3.5 accent-(--accent)'
+            jsx(Checkbox, {
+              checked: opt.meta !== false,
+              onCheckedChange: () => setOpt({ meta: opt.meta === false }),
+              'aria-label': t('toggleMeta'),
+              onClick: e => e.stopPropagation()
             }),
             t('toggleMeta')
           ]
         }, 'meta'),
-        jsx('label', {
-          className: 'flex items-center gap-1.5 text-xs text-(--foreground) cursor-pointer select-none whitespace-nowrap',
+        jsxs('span', {
+          className: 'flex items-center gap-1.5 text-xs cursor-pointer select-none whitespace-nowrap',
+          onClick: () => setOpt({ tools: !opt.tools }),
           children: [
-            jsx('input', {
-              type: 'checkbox', checked: !!opt.tools,
-              onChange: () => setOpt({ tools: !opt.tools }),
-              className: 'size-3.5 accent-(--accent)'
+            jsx(Checkbox, {
+              checked: !!opt.tools,
+              onCheckedChange: () => setOpt({ tools: !opt.tools }),
+              'aria-label': t('toggleTools'),
+              onClick: e => e.stopPropagation()
             }),
             t('toggleTools')
           ]
         }, 'tools'),
-        jsx('label', {
-          className: 'flex items-center gap-1.5 text-xs text-(--foreground) cursor-pointer select-none whitespace-nowrap',
+        jsxs('span', {
+          className: 'flex items-center gap-1.5 text-xs cursor-pointer select-none whitespace-nowrap',
+          onClick: () => setOpt({ full: !opt.full }),
           children: [
-            jsx('input', {
-              type: 'checkbox', checked: opt.full !== false,
-              onChange: () => setOpt({ full: !opt.full }),
-              className: 'size-3.5 accent-(--accent)'
+            jsx(Checkbox, {
+              checked: opt.full !== false,
+              onCheckedChange: () => setOpt({ full: !opt.full }),
+              'aria-label': t('fullLabel'),
+              onClick: e => e.stopPropagation()
             }),
             t('fullLabel')
           ]
         }, 'full')
       ] }),
-      // Row 3: export actions pulled left to sit with the rest — one
-      // coordinated block instead of a lone right-floating cluster.
+      // Row 3: export actions — one coordinated block, hierarchy per spec
+      // #13: Copy image = primary, Download long image = secondary, the
+      // document formats recede to ghost/outline. Same size on every button.
       jsxs('div', { className: 'flex items-center gap-2 flex-wrap', children: [
-        jsx(Button, { size: 'sm', onClick: () => void doDownloadMd(), children: 'Markdown' }),
-        jsx(Button, { size: 'sm', onClick: () => void doDownloadJson(), children: 'JSON' }),
-        jsx(Button, { size: 'sm', onClick: () => void doDownloadHtml(), children: 'HTML' }),
-        jsx(Button, { size: 'sm', onClick: () => void doDownloadPdf(), children: t('btnPdf') }),
+        jsx(Button, { size: 'sm', variant: 'ghost', onClick: () => void doDownloadMd(), children: 'Markdown' }),
+        jsx(Button, { size: 'sm', variant: 'ghost', onClick: () => void doDownloadJson(), children: 'JSON' }),
+        jsx(Button, { size: 'sm', variant: 'ghost', onClick: () => void doDownloadHtml(), children: 'HTML' }),
+        jsx(Button, { size: 'sm', variant: 'outline', onClick: () => void doDownloadPdf(), children: t('btnPdf') }),
         jsx(Divider, {}),
-        jsx(Button, { size: 'sm', onClick: () => void doDownloadPng(), children: t('btnPng') }),
+        jsx(Button, { size: 'sm', variant: 'secondary', onClick: () => void doDownloadPng(), children: t('btnPng') }),
         jsx(Button, { size: 'sm', onClick: () => void doCopyPng(), children: t('btnCopyPng') })
       ] }),
-      (opt.meta !== false && ml) ? jsx('div', { className: 'text-xs text-(--muted-foreground)', children: ml }, 'meta') : null
+      (opt.meta !== false && ml) ? jsx('div', { className: 'text-xs', style: { color: 'var(--ui-text-tertiary)' }, children: ml }, 'meta') : null
     ]
   })
 }
 
 // Hairline vertical divider between toolbar groups.
 function Divider () {
-  return jsx('span', { className: 'self-stretch my-0.5 w-px bg-(--border) shrink-0', 'aria-hidden': 'true' })
+  return jsx('span', { className: 'self-stretch w-px shrink-0', style: { background: 'var(--ui-stroke-tertiary)', margin: '2px 0' }, 'aria-hidden': 'true' })
 }
 
 // Editable conversation title for exports. Editing only affects the current
@@ -1611,9 +1728,13 @@ function TitleHeader ({ t, st }) {
   }
   return jsxs('div', { className: 'flex items-center gap-2 px-4 pt-3 pb-1', children: [
     editing
-      ? jsx('input', {
+      ? jsx(Input, {
           autoFocus: true,
-          className: 'font-medium text-sm min-w-0 flex-1 rounded-md border border-(--accent) bg-transparent px-2 py-1 text-(--foreground)',
+          // Host Input: controlVariants chrome + compiled focus behavior
+          // (`.desktop-input-chrome` lights its border on :focus — the host's
+          // field focus story, story 14). No hand-painted border here.
+          size: 'sm',
+          className: 'font-medium text-sm min-w-0 flex-1',
           value: draft,
           onChange: e => setDraft(e.target.value),
           onBlur: commit,
@@ -1628,13 +1749,15 @@ function TitleHeader ({ t, st }) {
           onClick: () => { setDraft(st.title || ''); setEditing(true) },
           children: st.title || t('shareTitle')
         }),
-    st.sid ? jsx('span', { className: 'text-xs text-(--muted-foreground)', children: st.sid.slice(0, 8) + '…' }) : null,
+    // Session-id fragment dropped (spec story 17): the title is the header's
+    // only visual anchor; session meta rides the toolbar line when toggled on.
     jsx('span', { className: 'flex-1' }),
-    st.loading ? jsx(GlyphSpinner, { className: 'text-(--muted-foreground)' }) : null,
-    // Build sentinel: proves which code the running process actually loaded.
-    // If this doesn't read PLUGIN_VERSION after an update, the host kept the
-    // old ESM module cached — fully quit and relaunch the desktop app.
-    jsx('span', { className: 'text-[10px] text-(--muted-foreground) opacity-60 shrink-0', title: t('verTip'), children: 'v' + PLUGIN_VERSION })
+    st.loading ? jsx('span', { style: { color: 'var(--ui-text-tertiary)' }, children: jsx(GlyphSpinner, {}) }) : null,
+    // Build sentinel (spec story 16): kept, but demoted from inline text to a
+    // quiet outline badge with a hover Tip. If this doesn't read
+    // PLUGIN_VERSION after an update, the host kept the old ESM module cached
+    // — fully quit and relaunch the desktop app.
+    jsx(Tip, { label: t('verTip'), children: jsx(Badge, { variant: 'outline', size: 'xs', children: 'v' + PLUGIN_VERSION }) })
   ] })
 }
 
@@ -1688,21 +1811,25 @@ function SharePage () {
     jsx(Toolbar, {}),
     jsx(AskModal, {}),
     range ? jsxs('div', {
-      className: 'flex items-center gap-2 px-4 py-1 text-xs bg-(--accent)/10 text-(--foreground) border-b border-(--border)',
+      className: 'flex items-center gap-2 px-4 py-1 text-xs',
+      style: { background: 'var(--ui-row-active-background)', borderBottom: '1px solid var(--ui-stroke-tertiary)' },
       children: [
         jsx('span', { children: t('rangeTip', (range.lo + 1) + '~' + (range.hi + 1)) }),
         jsx(Button, { size: 'xs', variant: 'text', onClick: () => selAtom.set(new Set(turns.map(x => x.id))), children: t('selectAll') }),
         jsx(Button, { size: 'xs', variant: 'text', onClick: () => selAtom.set(null), children: t('rangeClear') })
       ]
     }, 'rangeclear') : null,
-    st.error ? jsxs('div', { className: 'p-6 flex flex-col items-start gap-3', children: [
-      jsx(EmptyState, { title: t('loadFail'), description: st.error === 'no-focused-session' ? t('needSession') : st.error }),
-      jsx(Button, { size: 'sm', onClick: () => void fetchTurns(), children: t('retry') })
-    ] }) : !turns.length && !st.loading ? jsxs('div', { className: 'p-6 flex flex-col items-start gap-3', children: [
+    // Empty/error states sit centered on the page body (spec story 13) — the
+    // host components already center their copy; the wrapper centers the block.
+    st.error ? jsx('div', { className: 'flex-1 min-h-0 flex items-center justify-center p-6', children: jsxs(ErrorState, {
+      title: t('loadFail'),
+      description: st.error === 'no-focused-session' ? t('needSession') : st.error,
+      children: jsx(Button, { size: 'sm', onClick: () => void fetchTurns(), children: t('retry') })
+    }) }, 'error') : !turns.length && !st.loading ? jsx('div', { className: 'flex-1 min-h-0 flex items-center justify-center p-6', children: jsxs('div', { className: 'flex flex-col items-center gap-3', children: [
       jsx(EmptyState, { title: t('empty') }),
       jsx(Button, { size: 'sm', onClick: () => void fetchTurns(), children: t('retry') })
-    ] }) : jsx('div', { className: 'flex-1 min-h-0 relative', children: [
-      jsx('div', { className: 'h-full overflow-y-auto px-4 pr-5', children: jsx('div', { className: 'mx-auto w-full max-w-[880px]', children:
+    ] }) }, 'empty') : jsx('div', { className: 'flex-1 min-h-0 relative', children: [
+      jsx('div', { className: 'h-full overflow-y-auto px-4', style: { paddingRight: '20px' }, children: jsx('div', { className: 'mx-auto w-full', style: { maxWidth: '880px' }, children:
         turns.map(turn => jsx(TurnRow, {
           turn, checked: sel == null ? true : sel.has(turn.id), onToggle: toggle,
           expanded: exp.has(turn.id), onExpand: toggleExpand, active: turn.id === activeId
@@ -1723,6 +1850,7 @@ const STRINGS = {
     empty: 'No turns in this session yet',
     labelUser: 'You', labelAssistant: 'Assistant',
     selectAll: 'All', clearSel: 'None', invertSel: 'Invert',
+    toggleTurn: n => 'select turn ' + n,
     selCount: (n, m) => n + ' / ' + m + ' turns',
     widthN: w => 'width ' + w + 'px',
     fontN: px => 'font ' + px + 'px',
@@ -1736,6 +1864,7 @@ const STRINGS = {
     saved: 'Saved', savedN: n => n + ' files downloaded (too tall to merge into one PNG)', exportFailed: 'Export failed',
     turnsN: 'turns',
     searchPh: 'search turns…',
+    searchPrev: 'Previous match', searchNext: 'Next match',
     widthL: 'Width', fontL: 'Font',
     expand: (a, b) => 'expand (' + a + ' more repl' + (a === 1 ? 'y' : 'ies') + (b ? ' · ' + b + ' tool calls' : '') + ')',
     collapse: 'collapse',
@@ -1757,6 +1886,7 @@ const STRINGS = {
     empty: '这个会话还没有内容',
     labelUser: '我', labelAssistant: '助手',
     selectAll: '全选', clearSel: '清空', invertSel: '反选',
+    toggleTurn: n => '勾选第 ' + n + ' 轮',
     selCount: (n, m) => n + ' / ' + m + ' 轮',
     widthN: w => '宽 ' + w + 'px',
     fontN: px => '字号 ' + px + 'px',
@@ -1770,6 +1900,7 @@ const STRINGS = {
     saved: '已保存', savedN: n => '已下载 ' + n + ' 个文件（长图过高，无法合并为一张）', exportFailed: '导出失败',
     turnsN: '轮',
     searchPh: '搜索对话内容…',
+    searchPrev: '上一处', searchNext: '下一处',
     widthL: '宽度', fontL: '字号',
     expand: (a, b) => '展开（' + a + ' 条中间回复' + (b ? ' · ' + b + ' 个工具调用' : '') + '）',
     collapse: '收起',

@@ -19,12 +19,31 @@ export const PALETTE_AREA = 'palette'
 export const KEYBINDS_AREA = 'keybinds'
 export const TITLEBAR_AREAS = { center: 'titleBar.center', left: 'titleBar.left', right: 'titleBar.right' }
 // UI components as string tags — the plugin only ever passes them to jsx().
+// Keep this list in sync with the plugin's SDK imports (names verified
+// against apps/desktop/src/sdk/index.ts).
+export const Badge = 'span'
 export const Button = 'button'
+export const Checkbox = 'button' // Radix Root renders a role=checkbox button
 export const Tip = 'span'
+export const Dialog = 'div'
+export const DialogContent = 'div'
+export const DialogDescription = 'p'
+export const DialogFooter = 'div'
+export const DialogHeader = 'div'
+export const DialogTitle = 'h2'
 export const EmptyState = 'div'
+export const ErrorState = 'div'
 export const GlyphSpinner = 'span'
+export const Input = 'input'
 export const MessageTextContent = 'div'
 export const Codicon = 'i'
+export const SearchField = 'div'
+export const SegmentedControl = 'div'
+export const Select = 'div'
+export const SelectContent = 'div'
+export const SelectItem = 'div'
+export const SelectTrigger = 'button'
+export const SelectValue = 'span'
 export const usePluginI18n = () => key => key
 // Event tap (mirrors @/contrib/events): plugins subscribe via ctx.onEvent.
 const eventListeners = new Map()

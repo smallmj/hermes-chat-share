@@ -8,6 +8,8 @@ Share Hermes Desktop conversations as **long PNG screenshots, self-contained HTM
 
 ![Export sample](sample.png)
 
+*The sample above shows v1.1.x styling — the v1.2.0 screenshot will be refreshed after acceptance.*
+
 ## Install
 
 > ✅ Officially listed in the **Hermes Agent plugin catalog** (community tier) — merged via [NousResearch/hermes-agent#144552](https://github.com/NousResearch/hermes-agent/pull/144552), updated to v1.1.8 via [#146455](https://github.com/NousResearch/hermes-agent/pull/146455). Available in the docs at [hermes-agent.nousresearch.com/docs/plugins/hermes-chat-share](https://hermes-agent.nousresearch.com/docs/plugins/hermes-chat-share).
@@ -47,7 +49,7 @@ If the page doesn't show up: `⌘K / Ctrl+K` → `Reload desktop plugins`. On/of
 - **Per-turn collapsing**: every turn shows just your question and the final answer; *expand (N more replies · M tool calls)* reveals the rest, per turn.
 - **Share-scope checkbox**: uncheck “share full conversation” and **all three exports** contain only question + final answer — exactly what the collapsed view shows.
 
-**Honest session metadata** — model & provider, thinking effort, cache hit rate, output speed (tok/s), token totals and Hermes version appear in the page header and in every export, read from the gateway's real surfaces — the `session.usage` RPC and `session.info` gateway events. Fields that aren't available are omitted, never invented.
+**Honest session info** — model & provider, thinking effort, cache hit rate, output speed (tok/s), token totals and Hermes version appear in the page header and in every export, read from the gateway's real surfaces — the `session.usage` RPC and `session.info` gateway events. Fields that aren't available are omitted, never invented.
 
 **Exports**
 - **PNG long image** at 680/880/1080 px wide, three font scales, 2× DPR, colors snapshotted from your live app theme (light *and* dark). Huge single replies are **split across pages automatically**, so a 10,000-line log dump can't silently truncate the image. Tall exports auto-paginate; multi-page downloads are **stitched back into one long PNG**, so the browser's one-download-per-page limit never eats pages.
@@ -57,8 +59,11 @@ If the page doesn't show up: `⌘K / Ctrl+K` → `Reload desktop plugins`. On/of
 - **PDF as a direct download** — one click produces a real `.pdf` file (each page an embedded full-bleed image, zero dependencies, no print dialog).
 - Keeps real rendering: code blocks, tables, quotes, inline code, tool-call chips (checkbox-controlled), timestamps. External images, `MEDIA:` attachments and `::preview` widgets become labeled placeholders in PNGs (canvas-taint rules) and keep their links in HTML/Markdown.
 - **Your export prefs are remembered** (width, font, theme, toggles) and the export **title is editable** inline before you share.
+- **Export styling polished for v1.2.0** — avatars and tool icons are vectors, no emoji; user bubbles tightened into light-tinted, small-radius blocks; heading → body → code rhythm runs denser; blockquote bar, inline-code tint and footer rule read crisper. And the “follow app theme” probe is fixed: v1.1.8 always fell back to a hardcoded light palette — exports now really snapshot your live theme.
 
 **The UI follows the app language** (English / 简体中文 automatically), and dialogs are opaque and theme-correct in both modes.
+
+**The share pane follows the app theme** (v1.2.0) — colors, borders and hover states bind to the host's semantic tokens end to end, so card outlines, dividers, the turn gutter, the focused-turn outline and the sticky toolbar background (some of which silently rendered nothing in v1.1.8) now come up right under any Hermes theme, light or dark. Controls are the host's own primitives: a segmented theme picker, host dropdowns for width and font, a proper search field, and the host dialog for export-failure prompts; tool chips and stepper buttons use vector icons.
 
 ## How it works
 
@@ -72,15 +77,17 @@ Everything runs locally inside your Desktop app. Conversation content never leav
 
 ```bash
 node --check desktop/plugin.js   # syntax
+bash dev-tests/extract-core.sh   # extract the CORE block → dev-tests/core.mjs
+node dev-tests/meta.test.mjs     # export-core unit suites: meta/css/style/colors/scope/icons/theme/JSON/range/highlight/esc/inline/split/PDF
+node dev-tests/guard.test.mjs    # source-level guards: token discipline, emoji icons, native-control bans
 ./dev-tests/stub-runner.sh       # SDK registration smoke test → STUB_OK
-node dev-tests/meta.test.mjs     # 12 unit suites: meta/colors/scope/theme/JSON/range/highlight/esc/inline/split/PDF
 ```
 
 Git installs require the `desktop/plugin.js` layout at repo root — see the [plugin SDK docs](https://hermes-agent.nousresearch.com/docs/developer-guide/desktop-plugin-sdk).
 
 ## Known edges
 
-- Very old archived sessions may lack live metadata — the meta line silently omits unavailable fields.
+- Very old archived sessions may lack live session info — the session-info line silently omits unavailable fields.
 - PNGs cannot embed cross-origin raster images (browser canvas rules); HTML/Markdown keep them as links.
 - One merged PNG is capped by browser canvas limits (≈65,535 px side / 268 M px total); beyond that, a dialog offers **paginated PNG download** or switching to HTML / Markdown / PDF for the whole content in one file.
 - Garbled `�` diamonds in an export usually come from the **conversation data itself** (e.g. logs captured on Windows via `powershell Get-Content` decoding UTF-8 as GBK). The plugin renders the session byte-for-byte; fix the capture encoding at the source.
