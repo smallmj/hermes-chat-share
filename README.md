@@ -49,7 +49,7 @@ If the page doesn't show up: `⌘K / Ctrl+K` → `Reload desktop plugins`. On/of
 - **Per-turn collapsing**: every turn shows just your question and the final answer; *expand (N more replies · M tool calls)* reveals the rest, per turn.
 - **Share-scope checkbox**: uncheck “share full conversation” and **all three exports** contain only question + final answer — exactly what the collapsed view shows.
 
-**Honest session metadata** — model & provider, thinking effort, cache hit rate, output speed (tok/s), token totals and Hermes version appear in the page header and in every export, read from the gateway's real surfaces — the `session.usage` RPC and `session.info` gateway events. Fields that aren't available are omitted, never invented.
+**Honest session info** — model & provider, thinking effort, cache hit rate, output speed (tok/s), token totals and Hermes version appear in the page header and in every export, read from the gateway's real surfaces — the `session.usage` RPC and `session.info` gateway events. Fields that aren't available are omitted, never invented.
 
 **Exports**
 - **PNG long image** at 680/880/1080 px wide, three font scales, 2× DPR, colors snapshotted from your live app theme (light *and* dark). Huge single replies are **split across pages automatically**, so a 10,000-line log dump can't silently truncate the image. Tall exports auto-paginate; multi-page downloads are **stitched back into one long PNG**, so the browser's one-download-per-page limit never eats pages.
@@ -77,15 +77,17 @@ Everything runs locally inside your Desktop app. Conversation content never leav
 
 ```bash
 node --check desktop/plugin.js   # syntax
+bash dev-tests/extract-core.sh   # extract the CORE block → dev-tests/core.mjs
+node dev-tests/meta.test.mjs     # export-core unit suites: meta/css/style/colors/scope/icons/theme/JSON/range/highlight/esc/inline/split/PDF
+node dev-tests/guard.test.mjs    # source-level guards: token discipline, emoji icons, native-control bans
 ./dev-tests/stub-runner.sh       # SDK registration smoke test → STUB_OK
-node dev-tests/meta.test.mjs     # 12 unit suites: meta/colors/scope/theme/JSON/range/highlight/esc/inline/split/PDF
 ```
 
 Git installs require the `desktop/plugin.js` layout at repo root — see the [plugin SDK docs](https://hermes-agent.nousresearch.com/docs/developer-guide/desktop-plugin-sdk).
 
 ## Known edges
 
-- Very old archived sessions may lack live metadata — the meta line silently omits unavailable fields.
+- Very old archived sessions may lack live session info — the session-info line silently omits unavailable fields.
 - PNGs cannot embed cross-origin raster images (browser canvas rules); HTML/Markdown keep them as links.
 - One merged PNG is capped by browser canvas limits (≈65,535 px side / 268 M px total); beyond that, a dialog offers **paginated PNG download** or switching to HTML / Markdown / PDF for the whole content in one file.
 - Garbled `�` diamonds in an export usually come from the **conversation data itself** (e.g. logs captured on Windows via `powershell Get-Content` decoding UTF-8 as GBK). The plugin renders the session byte-for-byte; fix the capture encoding at the source.

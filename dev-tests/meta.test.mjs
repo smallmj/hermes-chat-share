@@ -107,11 +107,28 @@ for (const w of whoBlocks) {
   assert(/<svg[^>]*xmlns="http:\/\/www\.w3\.org\/2000\/svg"/.test(w), 'nested svg re-declares the SVG namespace')
   assert(/currentColor/.test(w), 'icon color follows currentColor (driven by embedded values)')
 }
-assert(/<span class="chsh-av chsh-av-user"/.test(markedUp), 'user avatar chip class present')
-assert(/<span class="chsh-av chsh-av-asst"/.test(markedUp), 'assistant avatar chip class present')
+// one styled class, no per-role modifiers: exportCss styles `.chsh-av` only,
+// so the old `chsh-av-user/-asst` suffixes were dead decoration (#19 item 2).
+assert(/<span class="chsh-av">/.test(markedUp), 'avatar chip carries the single styled class')
+assert(!/chsh-av-/.test(markedUp), 'no unstyled chsh-av-* modifier classes in export markup')
+assert(/<span class="chsh-av"><svg[^>]*><circle cx="12" cy="8"/.test(markedUp), 'user avatar paints the person icon inside the plain chip')
 const chips = toolsXhtml(iconTurn)
 assert(chips.includes('<svg') && /<svg[^>]*viewBox="0 0 24 24"/.test(chips), 'tool chip has an inline SVG icon')
 assert(/class="chsh-tool"/.test(chips) && chips.includes('terminal'), 'tool chip keeps its class and label')
+// unknown role kinds must never borrow the wrench (#19 review item 1): the
+// callers only ever pass user/asst/tool, so a typo must degrade to a neutral
+// dot, not silently paint a tool glyph in a turn header.
+const { chshIcon } = await import('./core.mjs')
+assert(chshIcon('user').includes('<circle cx="12" cy="8" r="4"'), 'user kind keeps its person head')
+assert(chshIcon('asst').includes('<rect x="4" y="7.1"'), 'assistant kind keeps its bot head')
+assert(chshIcon('tool').includes('M14.7 6.3'), 'tool kind keeps its wrench')
+for (const bogus of ['userr', 'assist', 'Tool', '']) {
+  const ico = chshIcon(bogus)
+  assert(!ico.includes('M14.7 6.3'), 'unknown kind ' + JSON.stringify(bogus) + ' must not draw the wrench')
+  assert(ico.includes('<circle cx="12" cy="12"'), 'unknown kind falls back to a neutral dot')
+  assert(ico.startsWith('<svg ') && /<svg[^>]*xmlns="http:\/\/www\.w3\.org\/2000\/svg"/.test(ico),
+    'fallback stays a valid inline SVG (xmlns re-declared for foreignObject)')
+}
 // the whole fragment must stay self-contained: no image, no link, no fetch
 assert(!/<(img|image|link|script)\b|url\(|xlink:href|@import/i.test(markedUp), 'export markup references nothing external')
 console.log('ICON_TEST_OK')
