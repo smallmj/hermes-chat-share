@@ -3,8 +3,10 @@
 import {
   host, haptic, useValue, atom,
   ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA, KEYBINDS_AREA, TITLEBAR_AREAS,
-  Button, EmptyState, GlyphSpinner, MessageTextContent, Codicon,
-  usePluginI18n
+  Badge, Button, Codicon, Dialog, DialogContent, DialogDescription, DialogFooter,
+  DialogHeader, DialogTitle, EmptyState, ErrorState, GlyphSpinner, MessageTextContent,
+  SearchField, SegmentedControl, Select, SelectContent, SelectItem, SelectTrigger,
+  SelectValue, Tip, usePluginI18n
 } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useState } from 'react'
@@ -1244,29 +1246,20 @@ function AskModal () {
     } catch (err) { fail(err) }
     close()
   }
-  // Theme tokens can carry alpha (macOS window vibrancy) — flatten every
-  // paint to a solid color so the dialog never blends into page text.
-  const th = snapshotTheme(document.documentElement)
-  const pageBg = solidColor(th.bg, isDarkColor(th.bg) ? '#000000' : '#ffffff')
-  const dark = isDarkColor(pageBg)
-  const cardBg = solidColor(solidColor(th.card, pageBg), dark ? '#000000' : '#ffffff')
-  return jsx('div', {
-    className: 'fixed inset-0 flex items-center justify-center',
-    style: { background: 'rgba(0,0,0,0.5)', zIndex: 2147483000 },
-    onClick: close,
-    children: jsxs('div', {
-      className: 'p-5 mx-4 w-full max-w-[420px] flex flex-col gap-3',
-      style: {
-        background: cardBg, color: solidColor(th.fg, cardBg),
-        border: '1px solid ' + solidColor(th.border, cardBg), borderRadius: 12,
-        boxShadow: '0 12px 40px rgba(0,0,0,0.45)'
-      },
-      onClick: e => e.stopPropagation(),
+  // Host Dialog group (spec #13): overlay, portal, focus trap, Esc-to-close
+  // and the X all come from the host's own dialog skin. The pane must not
+  // hand-roll scrim/card colors off a snapshot — that palette went stale on
+  // theme change and flattened real theme tokens into light-mode fallbacks.
+  return jsx(Dialog, {
+    open: true,
+    onOpenChange: open => { if (!open) close() },
+    children: jsxs(DialogContent, {
+      fitContent: true,
       children: [
-        jsx('div', { className: 'font-medium text-sm', children: t('askTitle') }),
-        jsx('div', { className: 'text-xs leading-relaxed', style: { color: solidColor(th.muted, cardBg) }, children: ask.reason }),
-        jsxs('div', { className: 'flex justify-end gap-2 mt-1', children: [
-          jsx(Button, { size: 'sm', variant: 'text', onClick: close, children: t('btnCancel') }),
+        jsx(DialogHeader, { children: jsx(DialogTitle, { children: t('askTitle') }) }),
+        jsx(DialogDescription, { children: ask.reason }),
+        jsxs(DialogFooter, { children: [
+          jsx(Button, { size: 'sm', variant: 'outline', onClick: close, children: t('btnCancel') }),
           jsx(Button, { size: 'sm', onClick: () => void grab(), children: t('btnDownload') })
         ] })
       ]
@@ -1383,6 +1376,7 @@ function Gutter ({ turns }) {
   const activeId = useValue(activeAtom)
   const drag = useValue(dragAtom)
   const sel = useValue(selAtom)
+  const [hoverId, setHoverId] = useState(null) // hover feedback for ticks (see below)
   if (turns.length < 2) return null
   const gap = turns.length > 40 ? 1 : 2
   const dragStart = (id, e) => {
@@ -1406,21 +1400,34 @@ function Gutter ({ turns }) {
   }
   const inDrag = id => drag && id >= Math.min(drag.fromId, drag.toId) && id <= Math.max(drag.fromId, drag.toId)
   return jsx('div', {
-    className: 'absolute top-3 bottom-3 right-0 w-[10px] flex flex-col z-30',
-    style: { gap: gap + 'px' },
+    // The rail geometry goes inline: an arbitrary-value class like a px width
+    // is never compiled for a runtime plugin (ADR-0001), and the old one was
+    // part of why the gutter rendered invisible.
+    className: 'absolute top-3 bottom-3 right-0 flex flex-col z-30',
+    style: { width: '10px', gap: gap + 'px' },
     children: turns.map(x => {
       const snippet = (((x.user && x.user.text) || (x.asst[0] && x.asst[0].text) || '') + '').replace(/\s+/g, ' ').slice(0, 48)
       const highlighted = inDrag(x.id)
+      const isActive = x.id === activeId
+      // Hover bumps a resting tick to the strongest stroke tier; the active
+      // turn and the drag band paint with the accent token. State-driven (not
+      // a hover: class) because inline paints always outrank hover classes.
+      const hover = x.id === hoverId
+      const paint = highlighted || isActive ? 'var(--ui-accent)' : (hover ? 'var(--ui-stroke-primary)' : 'var(--ui-stroke-secondary)')
       return jsx('div', {
         role: 'button',
         title: (x.id + 1) + '. ' + snippet,
         onPointerDown: e => dragStart(x.id, e),
         onPointerMove: () => dragMove(x.id),
         onPointerUp: () => dragEnd(x.id),
-        className: 'flex-1 min-h-[2px] rounded-full',
+        onPointerEnter: () => setHoverId(x.id),
+        onPointerLeave: () => setHoverId(cur => (cur === x.id ? null : cur)),
+        className: 'flex-1 rounded-full',
         style: {
-          background: highlighted ? 'var(--accent)' : (x.id === activeId ? 'var(--accent)' : 'var(--border)'),
+          minHeight: '2px',
+          background: paint,
           opacity: highlighted ? 0.55 : 1,
+          transition: 'background-color 120ms',
           cursor: 'pointer',
           touchAction: 'none'
         }
@@ -1438,30 +1445,39 @@ function TurnRow ({ turn, checked, onToggle, expanded, onExpand, active }) {
   const collapsible = mid > 0 || turn.tools.length > 0
   return jsxs('div', {
     ref: el => { if (el) rowEls.set(turn.id, el); else rowEls.delete(turn.id) },
-    className: 'flex gap-3 py-3 border-b border-(--border)',
-    style: active ? { boxShadow: 'inset 0 0 0 2px var(--accent)', borderRadius: 10 } : undefined,
+    className: 'flex gap-3 py-3',
+    style: {
+      borderBottom: '1px solid var(--ui-stroke-tertiary)',
+      // Focused turn (search jump / gutter click) gets a visible accent ring.
+      ...(active ? { boxShadow: 'inset 0 0 0 2px var(--ui-accent)', borderRadius: 'var(--radius-lg)' } : null)
+    },
     children: [
       jsx('input', {
-        type: 'checkbox', className: 'mt-2 shrink-0 accent-(--accent)',
+        type: 'checkbox', className: 'mt-2 size-3.5 shrink-0',
+        style: { accentColor: 'var(--ui-accent)' },
         checked, onChange: () => onToggle(turn.id)
       }),
       jsxs('div', { className: 'min-w-0 flex-1 flex flex-col gap-2', children: [
-        turn.user && turn.user.text ? jsxs('div', { className: 'rounded-xl border border-(--border) bg-(--card) px-3 py-2', children: [
-          jsxs('div', { className: 'text-xs text-(--muted-foreground) mb-1 flex gap-2', children: [
-            jsx('span', { className: 'font-medium', children: t('labelUser') }),
-            turn.user.ts ? jsx('span', { children: fmtTs(turn.user.ts) }) : null
-          ] }),
-          jsx(MessageTextContent, { text: turn.user.text })
-        ] }) : null,
+        turn.user && turn.user.text ? jsxs('div', {
+          className: 'px-3 py-2',
+          style: { border: '1px solid var(--ui-stroke-secondary)', background: 'var(--ui-bg-card)', borderRadius: 'var(--radius-xl)' },
+          children: [
+            jsxs('div', { className: 'text-xs mb-1 flex gap-2', style: { color: 'var(--ui-text-tertiary)' }, children: [
+              jsx('span', { className: 'font-medium', children: t('labelUser') }),
+              turn.user.ts ? jsx('span', { children: fmtTs(turn.user.ts) }) : null
+            ] }),
+            jsx(MessageTextContent, { text: turn.user.text })
+          ]
+        }) : null,
         showAsst.map((a, k) => jsxs('div', { className: 'min-w-0', children: [
-          jsxs('div', { className: 'text-xs text-(--muted-foreground) mb-1 mt-2 flex gap-2', children: [
+          jsxs('div', { className: 'text-xs mb-1 mt-2 flex gap-2', style: { color: 'var(--ui-text-tertiary)' }, children: [
             jsx('span', { className: 'font-medium', children: t('labelAssistant') }),
             a.ts ? jsx('span', { children: fmtTs(a.ts) }) : null
           ] }),
           jsx('div', { className: 'min-w-0 overflow-hidden', children: jsx(MessageTextContent, { text: a.text }) })
         ] }, k)),
         showTools ? jsx('div', { className: 'flex flex-wrap gap-1 pt-1', children: turn.tools.map((x, k) =>
-          jsx('span', { className: 'text-[11px] px-2 py-0.5 rounded-full border border-(--border) text-(--muted-foreground)', children: '🔧 ' + x.name }, k)) }) : null,
+          jsxs(Badge, { variant: 'outline', size: 'xs', children: [jsx(Codicon, { name: 'tools', size: '0.75rem' }), x.name] }, k)) }) : null,
         collapsible ? jsx(Button, { size: 'xs', variant: 'text', onClick: () => onExpand(turn.id), children: expanded ? t('collapse') : t('expand', mid, turn.tools.length) }) : null
       ] })
     ]
@@ -1495,108 +1511,118 @@ function Toolbar () {
     jumpToTurn(cur.ids[at], true)
   }
   return jsxs('div', {
-    className: 'border-b border-(--border) sticky top-0 bg-(--background) z-10 flex flex-col gap-1.5 px-4 py-2',
+    // Sticky toolbar needs an OPAQUE paint (inline --ui-bg-chrome, never a
+    // class — plugin classes are not compiled): scrolling turns must not show
+    // through the header.
+    className: 'sticky top-0 z-10 flex flex-col gap-1.5 px-4 py-2',
+    style: { background: 'var(--ui-bg-chrome)', borderBottom: '1px solid var(--ui-stroke-tertiary)' },
     children: [
       // One visual system: groups separated by hairline dividers (Divider),
       // everything left-aligned except the export row's trailing actions.
       // flex-wrap keeps narrow windows flowing instead of clipping.
       // Row 1: selection group | search group.
       jsxs('div', { className: 'flex items-center gap-x-2.5 gap-y-1 flex-wrap min-w-0', children: [
-        jsx('span', { className: 'text-sm text-(--muted-foreground) whitespace-nowrap', children: t('selCount', selected.length, turns.length) }),
+        jsx('span', { className: 'text-sm whitespace-nowrap', style: { color: 'var(--ui-text-secondary)' }, children: t('selCount', selected.length, turns.length) }),
         jsx(Button, { size: 'xs', variant: 'text', onClick: () => setSel(null), children: t('selectAll') }),
         jsx(Button, { size: 'xs', variant: 'text', onClick: () => setSel([]), children: t('clearSel') }),
         jsx(Button, { size: 'xs', variant: 'text', onClick: () => setSel(turns.filter(x => !sel || !sel.has(x.id)).map(x => x.id)), children: t('invertSel') }),
         jsx(Divider, {}),
-        jsx('input', {
-          className: 'text-xs rounded-md border border-(--border) bg-transparent px-2 py-1 text-(--foreground) min-w-[160px]',
-          style: { width: 'min(240px, 40vw)' }, placeholder: t('searchPh'), value: q,
-          onChange: e => setQ(e.target.value),
+        jsx('span', { className: 'shrink-0', style: { width: 'min(240px, 40vw)' }, children: jsx(SearchField, {
+          variant: 'box', placeholder: t('searchPh'), value: q,
+          containerClassName: 'w-full',
+          onChange: setQ,
           onKeyDown: e => { if (e.key === 'Enter') { e.preventDefault(); step(e.shiftKey ? -1 : 1) } }
-        }),
-        jsx('span', { className: 'text-xs text-(--muted-foreground) shrink-0 text-center whitespace-nowrap', style: { width: 46 }, children: q.trim() ? (nav.at + 1) + '/' + nav.ids.length : '' }),
-        jsx(Button, { size: 'xs', variant: 'text', onClick: () => step(-1), children: '↑' }),
-        jsx(Button, { size: 'xs', variant: 'text', onClick: () => step(1), children: '↓' })
+        }) }),
+        jsx('span', { className: 'text-xs shrink-0 text-center whitespace-nowrap', style: { width: 46, color: 'var(--ui-text-tertiary)' }, children: q.trim() ? (nav.at + 1) + '/' + nav.ids.length : '' }),
+        jsx(Button, { size: 'icon-xs', variant: 'ghost', 'aria-label': t('searchPrev'), onClick: () => step(-1), children: jsx(Codicon, { name: 'arrow-up', size: '0.875rem' }) }),
+        jsx(Button, { size: 'icon-xs', variant: 'ghost', 'aria-label': t('searchNext'), onClick: () => step(1), children: jsx(Codicon, { name: 'arrow-down', size: '0.875rem' }) })
       ] }),
       // Row 2: layout options | content toggles.
       jsxs('div', { className: 'flex items-center gap-x-2.5 gap-y-1 flex-wrap', children: [
         jsxs('span', { className: 'flex items-center gap-1.5', children: [
-          jsx('span', { className: 'text-xs text-(--muted-foreground) whitespace-nowrap', children: t('widthL') }),
-          jsx('select', {
-            className: 'text-xs rounded-md border border-(--border) bg-transparent px-1.5 py-1 text-(--foreground)',
-            value: String(opt.width), onChange: e => setOpt({ width: Number(e.target.value) }),
-            children: [680, 880, 1080].map(w => jsx('option', { value: String(w), children: t('widthN', w) }, w))
+          jsx('span', { className: 'text-xs whitespace-nowrap', style: { color: 'var(--ui-text-tertiary)' }, children: t('widthL') }),
+          jsx(Select, {
+            value: String(opt.width), onValueChange: v => setOpt({ width: Number(v) }),
+            children: [
+              jsx(SelectTrigger, { size: 'xs', style: { width: 104, flex: 'none' }, children: jsx(SelectValue, {}) }),
+              jsx(SelectContent, { children: [680, 880, 1080].map(w => jsx(SelectItem, { value: String(w), children: t('widthN', w) }, w)) })
+            ]
           })
         ] }),
         jsxs('span', { className: 'flex items-center gap-1.5', children: [
-          jsx('span', { className: 'text-xs text-(--muted-foreground) whitespace-nowrap', children: t('fontL') }),
-          jsx('select', {
-            className: 'text-xs rounded-md border border-(--border) bg-transparent px-1.5 py-1 text-(--foreground)',
-            value: String(opt.scale), onChange: e => setOpt({ scale: Number(e.target.value) }),
-            children: [0.85, 1, 1.2].map(s => jsx('option', { value: String(s), children: t('fontN', Math.round(15 * s)) }, s))
+          jsx('span', { className: 'text-xs whitespace-nowrap', style: { color: 'var(--ui-text-tertiary)' }, children: t('fontL') }),
+          jsx(Select, {
+            value: String(opt.scale), onValueChange: v => setOpt({ scale: Number(v) }),
+            children: [
+              jsx(SelectTrigger, { size: 'xs', style: { width: 112, flex: 'none' }, children: jsx(SelectValue, {}) }),
+              jsx(SelectContent, { children: [0.85, 1, 1.2].map(s => jsx(SelectItem, { value: String(s), children: t('fontN', Math.round(15 * s)) }, s)) })
+            ]
           })
         ] }),
         jsxs('span', { className: 'flex items-center gap-1.5', children: [
-          jsx('span', { className: 'text-xs text-(--muted-foreground) whitespace-nowrap', children: t('themeL') }),
-          jsx('select', {
-            className: 'text-xs rounded-md border border-(--border) bg-transparent px-1.5 py-1 text-(--foreground)',
-            value: opt.theme || 'auto', onChange: e => setOpt({ theme: e.target.value }),
-            children: ['auto', 'light', 'dark'].map(m => jsx('option', { value: m, children: t('themeM', m) }, m))
+          jsx('span', { className: 'text-xs whitespace-nowrap', style: { color: 'var(--ui-text-tertiary)' }, children: t('themeL') }),
+          // Theme tri-state as a host segmented control — WYSIWYG track, and
+          // `sizing:content` keeps the longest zh option ("跟随应用") on one line.
+          jsx(SegmentedControl, {
+            value: opt.theme || 'auto', onChange: v => setOpt({ theme: v }), sizing: 'content',
+            options: ['auto', 'light', 'dark'].map(m => ({ id: m, label: t('themeM', m) }))
           })
         ] }),
         jsx(Divider, {}),
         jsx('label', {
-          className: 'flex items-center gap-1.5 text-xs text-(--foreground) cursor-pointer select-none whitespace-nowrap',
+          className: 'flex items-center gap-1.5 text-xs cursor-pointer select-none whitespace-nowrap',
           children: [
             jsx('input', {
               type: 'checkbox', checked: opt.meta !== false,
               onChange: () => setOpt({ meta: opt.meta === false }),
-              className: 'size-3.5 accent-(--accent)'
+              className: 'size-3.5', style: { accentColor: 'var(--ui-accent)' }
             }),
             t('toggleMeta')
           ]
         }, 'meta'),
         jsx('label', {
-          className: 'flex items-center gap-1.5 text-xs text-(--foreground) cursor-pointer select-none whitespace-nowrap',
+          className: 'flex items-center gap-1.5 text-xs cursor-pointer select-none whitespace-nowrap',
           children: [
             jsx('input', {
               type: 'checkbox', checked: !!opt.tools,
               onChange: () => setOpt({ tools: !opt.tools }),
-              className: 'size-3.5 accent-(--accent)'
+              className: 'size-3.5', style: { accentColor: 'var(--ui-accent)' }
             }),
             t('toggleTools')
           ]
         }, 'tools'),
         jsx('label', {
-          className: 'flex items-center gap-1.5 text-xs text-(--foreground) cursor-pointer select-none whitespace-nowrap',
+          className: 'flex items-center gap-1.5 text-xs cursor-pointer select-none whitespace-nowrap',
           children: [
             jsx('input', {
               type: 'checkbox', checked: opt.full !== false,
               onChange: () => setOpt({ full: !opt.full }),
-              className: 'size-3.5 accent-(--accent)'
+              className: 'size-3.5', style: { accentColor: 'var(--ui-accent)' }
             }),
             t('fullLabel')
           ]
         }, 'full')
       ] }),
-      // Row 3: export actions pulled left to sit with the rest — one
-      // coordinated block instead of a lone right-floating cluster.
+      // Row 3: export actions — one coordinated block, hierarchy per spec
+      // #13: Copy image = primary, Download long image = secondary, the
+      // document formats recede to ghost/outline. Same size on every button.
       jsxs('div', { className: 'flex items-center gap-2 flex-wrap', children: [
-        jsx(Button, { size: 'sm', onClick: () => void doDownloadMd(), children: 'Markdown' }),
-        jsx(Button, { size: 'sm', onClick: () => void doDownloadJson(), children: 'JSON' }),
-        jsx(Button, { size: 'sm', onClick: () => void doDownloadHtml(), children: 'HTML' }),
-        jsx(Button, { size: 'sm', onClick: () => void doDownloadPdf(), children: t('btnPdf') }),
+        jsx(Button, { size: 'sm', variant: 'ghost', onClick: () => void doDownloadMd(), children: 'Markdown' }),
+        jsx(Button, { size: 'sm', variant: 'ghost', onClick: () => void doDownloadJson(), children: 'JSON' }),
+        jsx(Button, { size: 'sm', variant: 'ghost', onClick: () => void doDownloadHtml(), children: 'HTML' }),
+        jsx(Button, { size: 'sm', variant: 'outline', onClick: () => void doDownloadPdf(), children: t('btnPdf') }),
         jsx(Divider, {}),
-        jsx(Button, { size: 'sm', onClick: () => void doDownloadPng(), children: t('btnPng') }),
+        jsx(Button, { size: 'sm', variant: 'secondary', onClick: () => void doDownloadPng(), children: t('btnPng') }),
         jsx(Button, { size: 'sm', onClick: () => void doCopyPng(), children: t('btnCopyPng') })
       ] }),
-      (opt.meta !== false && ml) ? jsx('div', { className: 'text-xs text-(--muted-foreground)', children: ml }, 'meta') : null
+      (opt.meta !== false && ml) ? jsx('div', { className: 'text-xs', style: { color: 'var(--ui-text-tertiary)' }, children: ml }, 'meta') : null
     ]
   })
 }
 
 // Hairline vertical divider between toolbar groups.
 function Divider () {
-  return jsx('span', { className: 'self-stretch my-0.5 w-px bg-(--border) shrink-0', 'aria-hidden': 'true' })
+  return jsx('span', { className: 'self-stretch w-px shrink-0', style: { background: 'var(--ui-stroke-tertiary)', margin: '2px 0' }, 'aria-hidden': 'true' })
 }
 
 // Editable conversation title for exports. Editing only affects the current
@@ -1613,7 +1639,8 @@ function TitleHeader ({ t, st }) {
     editing
       ? jsx('input', {
           autoFocus: true,
-          className: 'font-medium text-sm min-w-0 flex-1 rounded-md border border-(--accent) bg-transparent px-2 py-1 text-(--foreground)',
+          className: 'font-medium text-sm min-w-0 flex-1 px-2 py-1',
+          style: { border: '1px solid var(--ui-accent)', background: 'transparent', color: 'var(--ui-text-primary)', borderRadius: 'var(--radius-md)' },
           value: draft,
           onChange: e => setDraft(e.target.value),
           onBlur: commit,
@@ -1628,13 +1655,15 @@ function TitleHeader ({ t, st }) {
           onClick: () => { setDraft(st.title || ''); setEditing(true) },
           children: st.title || t('shareTitle')
         }),
-    st.sid ? jsx('span', { className: 'text-xs text-(--muted-foreground)', children: st.sid.slice(0, 8) + '…' }) : null,
+    // Session-id fragment dropped (spec story 17): the title is the header's
+    // only visual anchor; session meta rides the toolbar line when toggled on.
     jsx('span', { className: 'flex-1' }),
-    st.loading ? jsx(GlyphSpinner, { className: 'text-(--muted-foreground)' }) : null,
-    // Build sentinel: proves which code the running process actually loaded.
-    // If this doesn't read PLUGIN_VERSION after an update, the host kept the
-    // old ESM module cached — fully quit and relaunch the desktop app.
-    jsx('span', { className: 'text-[10px] text-(--muted-foreground) opacity-60 shrink-0', title: t('verTip'), children: 'v' + PLUGIN_VERSION })
+    st.loading ? jsx('span', { style: { color: 'var(--ui-text-tertiary)' }, children: jsx(GlyphSpinner, {}) }) : null,
+    // Build sentinel (spec story 16): kept, but demoted from inline text to a
+    // quiet outline badge with a hover Tip. If this doesn't read
+    // PLUGIN_VERSION after an update, the host kept the old ESM module cached
+    // — fully quit and relaunch the desktop app.
+    jsx(Tip, { label: t('verTip'), children: jsx(Badge, { variant: 'outline', size: 'xs', children: 'v' + PLUGIN_VERSION }) })
   ] })
 }
 
@@ -1688,21 +1717,25 @@ function SharePage () {
     jsx(Toolbar, {}),
     jsx(AskModal, {}),
     range ? jsxs('div', {
-      className: 'flex items-center gap-2 px-4 py-1 text-xs bg-(--accent)/10 text-(--foreground) border-b border-(--border)',
+      className: 'flex items-center gap-2 px-4 py-1 text-xs',
+      style: { background: 'var(--ui-row-active-background)', borderBottom: '1px solid var(--ui-stroke-tertiary)' },
       children: [
         jsx('span', { children: t('rangeTip', (range.lo + 1) + '~' + (range.hi + 1)) }),
         jsx(Button, { size: 'xs', variant: 'text', onClick: () => selAtom.set(new Set(turns.map(x => x.id))), children: t('selectAll') }),
         jsx(Button, { size: 'xs', variant: 'text', onClick: () => selAtom.set(null), children: t('rangeClear') })
       ]
     }, 'rangeclear') : null,
-    st.error ? jsxs('div', { className: 'p-6 flex flex-col items-start gap-3', children: [
-      jsx(EmptyState, { title: t('loadFail'), description: st.error === 'no-focused-session' ? t('needSession') : st.error }),
-      jsx(Button, { size: 'sm', onClick: () => void fetchTurns(), children: t('retry') })
-    ] }) : !turns.length && !st.loading ? jsxs('div', { className: 'p-6 flex flex-col items-start gap-3', children: [
+    // Empty/error states sit centered on the page body (spec story 13) — the
+    // host components already center their copy; the wrapper centers the block.
+    st.error ? jsx('div', { className: 'flex-1 min-h-0 flex items-center justify-center p-6', children: jsxs(ErrorState, {
+      title: t('loadFail'),
+      description: st.error === 'no-focused-session' ? t('needSession') : st.error,
+      children: jsx(Button, { size: 'sm', onClick: () => void fetchTurns(), children: t('retry') })
+    }) }, 'error') : !turns.length && !st.loading ? jsx('div', { className: 'flex-1 min-h-0 flex items-center justify-center p-6', children: jsxs('div', { className: 'flex flex-col items-center gap-3', children: [
       jsx(EmptyState, { title: t('empty') }),
       jsx(Button, { size: 'sm', onClick: () => void fetchTurns(), children: t('retry') })
-    ] }) : jsx('div', { className: 'flex-1 min-h-0 relative', children: [
-      jsx('div', { className: 'h-full overflow-y-auto px-4 pr-5', children: jsx('div', { className: 'mx-auto w-full max-w-[880px]', children:
+    ] }) }, 'empty') : jsx('div', { className: 'flex-1 min-h-0 relative', children: [
+      jsx('div', { className: 'h-full overflow-y-auto px-4', style: { paddingRight: '20px' }, children: jsx('div', { className: 'mx-auto w-full', style: { maxWidth: '880px' }, children:
         turns.map(turn => jsx(TurnRow, {
           turn, checked: sel == null ? true : sel.has(turn.id), onToggle: toggle,
           expanded: exp.has(turn.id), onExpand: toggleExpand, active: turn.id === activeId
@@ -1736,6 +1769,7 @@ const STRINGS = {
     saved: 'Saved', savedN: n => n + ' files downloaded (too tall to merge into one PNG)', exportFailed: 'Export failed',
     turnsN: 'turns',
     searchPh: 'search turns…',
+    searchPrev: 'Previous match', searchNext: 'Next match',
     widthL: 'Width', fontL: 'Font',
     expand: (a, b) => 'expand (' + a + ' more repl' + (a === 1 ? 'y' : 'ies') + (b ? ' · ' + b + ' tool calls' : '') + ')',
     collapse: 'collapse',
@@ -1770,6 +1804,7 @@ const STRINGS = {
     saved: '已保存', savedN: n => '已下载 ' + n + ' 个文件（长图过高，无法合并为一张）', exportFailed: '导出失败',
     turnsN: '轮',
     searchPh: '搜索对话内容…',
+    searchPrev: '上一处', searchNext: '下一处',
     widthL: '宽度', fontL: '字号',
     expand: (a, b) => '展开（' + a + ' 条中间回复' + (b ? ' · ' + b + ' 个工具调用' : '') + '）',
     collapse: '收起',
