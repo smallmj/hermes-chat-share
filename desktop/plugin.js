@@ -3,8 +3,8 @@
 import {
   host, haptic, useValue, atom,
   ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA, KEYBINDS_AREA, TITLEBAR_AREAS,
-  Badge, Button, Codicon, Dialog, DialogContent, DialogDescription, DialogFooter,
-  DialogHeader, DialogTitle, EmptyState, ErrorState, GlyphSpinner, MessageTextContent,
+  Badge, Button, Checkbox, Codicon, Dialog, DialogContent, DialogDescription, DialogFooter,
+  DialogHeader, DialogTitle, EmptyState, ErrorState, GlyphSpinner, Input, MessageTextContent,
   SearchField, SegmentedControl, Select, SelectContent, SelectItem, SelectTrigger,
   SelectValue, Tip, usePluginI18n
 } from '@hermes/plugin-sdk'
@@ -313,14 +313,21 @@ const ICON_PATHS = {
   // wrench: outline, drawn with strokes so it stays legible at chip size
   tool: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>'
 }
+// `ICON_PATHS.tool` is deliberately NOT the fallback: callers only ever pass
+// user/asst/tool, so an unknown kind is a typo, and borrowing the wrench
+// would hide it (#19 review item 1). Unknown → neutral dot: still a valid
+// inline SVG, but obviously not a role glyph.
+const NEUTRAL_DOT = '<circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/>'
 function chshIcon (kind) {
-  return '<svg ' + ICON_ATTRS + '>' + (ICON_PATHS[kind] || ICON_PATHS.tool) + '</svg>'
+  return '<svg ' + ICON_ATTRS + '>' + (ICON_PATHS[kind] || NEUTRAL_DOT) + '</svg>'
 }
 
 // Turn header: avatar chip + timestamp. One helper, because the PNG pager
 // re-emits the same header for every fragment it splits out of a long turn.
+// The chip carries exactly the one styled class — role suffixes had no rules
+// in exportCss and only invited dead-CSS drift (#19 item 2).
 function whoXhtml (role, ts) {
-  return '<div class="chsh-who"><span class="chsh-av chsh-av-' + role + '">' + chshIcon(role) + '</span>' +
+  return '<div class="chsh-who"><span class="chsh-av">' + chshIcon(role) + '</span>' +
     (ts ? '<span class="chsh-ts">' + fmtTs(ts) + '</span>' : '') + '</div>'
 }
 
@@ -1507,10 +1514,13 @@ function TurnRow ({ turn, checked, onToggle, expanded, onExpand, active }) {
       ...(active ? { boxShadow: 'inset 0 0 0 2px var(--ui-accent)', borderRadius: 'var(--radius-lg)' } : null)
     },
     children: [
-      jsx('input', {
-        type: 'checkbox', className: 'mt-2 size-3.5 shrink-0',
-        style: { accentColor: 'var(--ui-accent)' },
-        checked, onChange: () => onToggle(turn.id)
+      // Host Checkbox (Radix): the pane never paints a native checkbox — the
+      // UA box takes no theme accent and its only focus cue is the UA outline;
+      // Checkbox ships compiled focus-visible ring/border classes (story 14, #19).
+      jsx(Checkbox, {
+        checked, onCheckedChange: () => onToggle(turn.id),
+        'aria-label': t('toggleTurn', turn.id + 1),
+        className: 'mt-2 shrink-0'
       }),
       jsxs('div', { className: 'min-w-0 flex-1 flex flex-col gap-2', children: [
         turn.user && turn.user.text ? jsxs('div', {
@@ -1537,6 +1547,22 @@ function TurnRow ({ turn, checked, onToggle, expanded, onExpand, active }) {
       ] })
     ]
   })
+}
+
+// One local builder for the toolbar's option selects (width / font). These
+// two Select structures were copy-pasted; #19 review item 3 asked for one.
+// Only the label, trigger width and the item set differ.
+function OptionSelect ({ label, value, triggerWidth, items, onValue }) {
+  return jsxs('span', { className: 'flex items-center gap-1.5', children: [
+    jsx('span', { className: 'text-xs whitespace-nowrap', style: { color: 'var(--ui-text-tertiary)' }, children: label }),
+    jsxs(Select, {
+      value, onValueChange: onValue,
+      children: [
+        jsx(SelectTrigger, { size: 'xs', style: { width: triggerWidth, flex: 'none' }, children: jsx(SelectValue, {}) }),
+        jsx(SelectContent, { children: items.map(it => jsx(SelectItem, { value: it.value, children: it.label }, it.value)) })
+      ]
+    })
+  ] })
 }
 
 function Toolbar () {
@@ -1594,26 +1620,16 @@ function Toolbar () {
       ] }),
       // Row 2: layout options | content toggles.
       jsxs('div', { className: 'flex items-center gap-x-2.5 gap-y-1 flex-wrap', children: [
-        jsxs('span', { className: 'flex items-center gap-1.5', children: [
-          jsx('span', { className: 'text-xs whitespace-nowrap', style: { color: 'var(--ui-text-tertiary)' }, children: t('widthL') }),
-          jsx(Select, {
-            value: String(opt.width), onValueChange: v => setOpt({ width: Number(v) }),
-            children: [
-              jsx(SelectTrigger, { size: 'xs', style: { width: 104, flex: 'none' }, children: jsx(SelectValue, {}) }),
-              jsx(SelectContent, { children: [680, 880, 1080].map(w => jsx(SelectItem, { value: String(w), children: t('widthN', w) }, w)) })
-            ]
-          })
-        ] }),
-        jsxs('span', { className: 'flex items-center gap-1.5', children: [
-          jsx('span', { className: 'text-xs whitespace-nowrap', style: { color: 'var(--ui-text-tertiary)' }, children: t('fontL') }),
-          jsx(Select, {
-            value: String(opt.scale), onValueChange: v => setOpt({ scale: Number(v) }),
-            children: [
-              jsx(SelectTrigger, { size: 'xs', style: { width: 112, flex: 'none' }, children: jsx(SelectValue, {}) }),
-              jsx(SelectContent, { children: [0.85, 1, 1.2].map(s => jsx(SelectItem, { value: String(s), children: t('fontN', Math.round(15 * s)) }, s)) })
-            ]
-          })
-        ] }),
+        jsx(OptionSelect, {
+          label: t('widthL'), value: String(opt.width), triggerWidth: 104,
+          items: [680, 880, 1080].map(w => ({ value: String(w), label: t('widthN', w) })),
+          onValue: v => setOpt({ width: Number(v) })
+        }),
+        jsx(OptionSelect, {
+          label: t('fontL'), value: String(opt.scale), triggerWidth: 112,
+          items: [0.85, 1, 1.2].map(s => ({ value: String(s), label: t('fontN', Math.round(15 * s)) })),
+          onValue: v => setOpt({ scale: Number(v) })
+        }),
         jsxs('span', { className: 'flex items-center gap-1.5', children: [
           jsx('span', { className: 'text-xs whitespace-nowrap', style: { color: 'var(--ui-text-tertiary)' }, children: t('themeL') }),
           // Theme tri-state as a host segmented control — WYSIWYG track, and
@@ -1624,35 +1640,45 @@ function Toolbar () {
           })
         ] }),
         jsx(Divider, {}),
-        jsx('label', {
+        // One pattern for all three content toggles (story 14, #19): the host
+        // Checkbox is the control (compiled focus-visible ring, keyboard space),
+        // the wrapper span keeps click-anywhere-on-label behavior — the
+        // checkbox stops its click from bubbling so a toggle never fires twice.
+        jsxs('span', {
           className: 'flex items-center gap-1.5 text-xs cursor-pointer select-none whitespace-nowrap',
+          onClick: () => setOpt({ meta: opt.meta === false }),
           children: [
-            jsx('input', {
-              type: 'checkbox', checked: opt.meta !== false,
-              onChange: () => setOpt({ meta: opt.meta === false }),
-              className: 'size-3.5', style: { accentColor: 'var(--ui-accent)' }
+            jsx(Checkbox, {
+              checked: opt.meta !== false,
+              onCheckedChange: () => setOpt({ meta: opt.meta === false }),
+              'aria-label': t('toggleMeta'),
+              onClick: e => e.stopPropagation()
             }),
             t('toggleMeta')
           ]
         }, 'meta'),
-        jsx('label', {
+        jsxs('span', {
           className: 'flex items-center gap-1.5 text-xs cursor-pointer select-none whitespace-nowrap',
+          onClick: () => setOpt({ tools: !opt.tools }),
           children: [
-            jsx('input', {
-              type: 'checkbox', checked: !!opt.tools,
-              onChange: () => setOpt({ tools: !opt.tools }),
-              className: 'size-3.5', style: { accentColor: 'var(--ui-accent)' }
+            jsx(Checkbox, {
+              checked: !!opt.tools,
+              onCheckedChange: () => setOpt({ tools: !opt.tools }),
+              'aria-label': t('toggleTools'),
+              onClick: e => e.stopPropagation()
             }),
             t('toggleTools')
           ]
         }, 'tools'),
-        jsx('label', {
+        jsxs('span', {
           className: 'flex items-center gap-1.5 text-xs cursor-pointer select-none whitespace-nowrap',
+          onClick: () => setOpt({ full: !opt.full }),
           children: [
-            jsx('input', {
-              type: 'checkbox', checked: opt.full !== false,
-              onChange: () => setOpt({ full: !opt.full }),
-              className: 'size-3.5', style: { accentColor: 'var(--ui-accent)' }
+            jsx(Checkbox, {
+              checked: opt.full !== false,
+              onCheckedChange: () => setOpt({ full: !opt.full }),
+              'aria-label': t('fullLabel'),
+              onClick: e => e.stopPropagation()
             }),
             t('fullLabel')
           ]
@@ -1692,10 +1718,13 @@ function TitleHeader ({ t, st }) {
   }
   return jsxs('div', { className: 'flex items-center gap-2 px-4 pt-3 pb-1', children: [
     editing
-      ? jsx('input', {
+      ? jsx(Input, {
           autoFocus: true,
-          className: 'font-medium text-sm min-w-0 flex-1 px-2 py-1',
-          style: { border: '1px solid var(--ui-accent)', background: 'transparent', color: 'var(--ui-text-primary)', borderRadius: 'var(--radius-md)' },
+          // Host Input: controlVariants chrome + compiled focus behavior
+          // (`.desktop-input-chrome` lights its border on :focus — the host's
+          // field focus story, story 14). No hand-painted border here.
+          size: 'sm',
+          className: 'font-medium text-sm min-w-0 flex-1',
           value: draft,
           onChange: e => setDraft(e.target.value),
           onBlur: commit,
@@ -1811,6 +1840,7 @@ const STRINGS = {
     empty: 'No turns in this session yet',
     labelUser: 'You', labelAssistant: 'Assistant',
     selectAll: 'All', clearSel: 'None', invertSel: 'Invert',
+    toggleTurn: n => 'select turn ' + n,
     selCount: (n, m) => n + ' / ' + m + ' turns',
     widthN: w => 'width ' + w + 'px',
     fontN: px => 'font ' + px + 'px',
@@ -1846,6 +1876,7 @@ const STRINGS = {
     empty: '这个会话还没有内容',
     labelUser: '我', labelAssistant: '助手',
     selectAll: '全选', clearSel: '清空', invertSel: '反选',
+    toggleTurn: n => '勾选第 ' + n + ' 轮',
     selCount: (n, m) => n + ' / ' + m + ' 轮',
     widthN: w => '宽 ' + w + 'px',
     fontN: px => '字号 ' + px + 'px',

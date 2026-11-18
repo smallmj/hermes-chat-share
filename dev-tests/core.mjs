@@ -293,14 +293,21 @@ const ICON_PATHS = {
   // wrench: outline, drawn with strokes so it stays legible at chip size
   tool: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>'
 }
+// `ICON_PATHS.tool` is deliberately NOT the fallback: callers only ever pass
+// user/asst/tool, so an unknown kind is a typo, and borrowing the wrench
+// would hide it (#19 review item 1). Unknown → neutral dot: still a valid
+// inline SVG, but obviously not a role glyph.
+const NEUTRAL_DOT = '<circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/>'
 function chshIcon (kind) {
-  return '<svg ' + ICON_ATTRS + '>' + (ICON_PATHS[kind] || ICON_PATHS.tool) + '</svg>'
+  return '<svg ' + ICON_ATTRS + '>' + (ICON_PATHS[kind] || NEUTRAL_DOT) + '</svg>'
 }
 
 // Turn header: avatar chip + timestamp. One helper, because the PNG pager
 // re-emits the same header for every fragment it splits out of a long turn.
+// The chip carries exactly the one styled class — role suffixes had no rules
+// in exportCss and only invited dead-CSS drift (#19 item 2).
 function whoXhtml (role, ts) {
-  return '<div class="chsh-who"><span class="chsh-av chsh-av-' + role + '">' + chshIcon(role) + '</span>' +
+  return '<div class="chsh-who"><span class="chsh-av">' + chshIcon(role) + '</span>' +
     (ts ? '<span class="chsh-ts">' + fmtTs(ts) + '</span>' : '') + '</div>'
 }
 
