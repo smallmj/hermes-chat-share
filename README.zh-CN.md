@@ -8,6 +8,8 @@
 
 ![导出样张](sample.png)
 
+*上方样张取自 v1.1.x——v1.2.0 截图待验收后更新。*
+
 ## 安装
 
 > ✅ 已正式收录进 **Hermes Agent 官方插件目录**（community 层级）——经 [NousResearch/hermes-agent#144552](https://github.com/NousResearch/hermes-agent/pull/144552) 合并，v1.1.8 更新经 [#146455](https://github.com/NousResearch/hermes-agent/pull/146455) 提交，官方文档页：[hermes-agent.nousresearch.com/docs/plugins/hermes-chat-share](https://hermes-agent.nousresearch.com/docs/plugins/hermes-chat-share)。
@@ -57,8 +59,11 @@ smallmj/hermes-chat-share
 - **PDF 直接下载**：一键生成真正的 `.pdf` 文件（每页一张全幅内嵌图，零依赖，不经过打印对话框）。
 - 保留真实渲染：代码块、表格、引用、行内代码、工具调用圆片（checkbox 开关）、时间戳。外链图片、`MEDIA:` 附件、`::preview` 组件在 PNG 里替换为占位标签（画布污染规则），HTML/Markdown 保留原链接。
 - **记住你的导出偏好**（宽度、字号、主题、各开关），导出**标题可编辑**后再分享。
+- **导出样式 v1.2.0 打磨**：头像与工具图标全部矢量化、告别 emoji；用户气泡收紧为轻底色小圆角块，标题→正文→代码块的垂直节奏更紧凑；引用条、行内代码底、页脚分隔线更清晰。「跟随应用」主题探针已修复——v1.1.8 实际永远落回硬编码浅色，现在导出真实快照当前主题。
 
 **界面语言跟随 App**（英/中自动切换），弹窗深浅色主题都正确且不透明。
+
+**分享面板跟随 App 主题**（v1.2.0）——配色、描边、悬停态全面绑定宿主语义令牌：卡片边框、分割线、导航槽、选中轮描边、吸顶工具栏背景（v1.1.8 里部分根本没渲染出来）在任意 Hermes 主题与深浅模式下都真实生效；控件换成宿主原语——分段主题选择、宽度/字号宿主下拉、像样的搜索框、导出失败走宿主对话框，工具圆片与步进按钮均为矢量图标。
 
 ## 原理
 

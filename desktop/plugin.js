@@ -14,7 +14,7 @@ import { useEffect, useState } from 'react'
 const PLUGIN_ID = 'hermes-chat-share'
 // Keep in sync with plugin.yaml. Rendered as a tiny badge in the page header
 // so "did my update actually load?" is always answerable at a glance.
-const PLUGIN_VERSION = '1.1.8'
+const PLUGIN_VERSION = '1.2.0'
 const ROUTE = '/chat-share'
 
 // ==== CORE START ==== (dependency-free export core; mirrored by the test harness)
