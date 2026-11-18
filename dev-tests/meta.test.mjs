@@ -281,3 +281,23 @@ for (const row of pdfStr.slice(xrefAt).split('\n').slice(2)) {
 // byte-exact JPEG embedding
 assert(pdfStr.includes(Buffer.from(fakeJpeg).toString('latin1')), 'jpeg bytes embedded verbatim')
 console.log('PDF_TEST_OK')
+
+// --- computed-value serialization: color(srgb ...) must parse (issue #20) ---
+// Live capture (theme "classic", mode dark): the --dt-* chains resolve through
+// color-mix, and Chromium serializes the computed color as `color(srgb r g b[/a])`
+// with 0..1 floats — which parseCssRgba used to reject, so 'follow the app
+// theme' silently exported the LIGHT fallback (#fff bg / #111 text) while
+// inline-painted --dt-muted/--dt-accent came through dark: mixed light/dark
+// artifacts. Values below are verbatim from the user's running app.
+const cp = await import('./core.mjs')
+assert.deepEqual(cp.parseCssRgba('color(srgb 0.0887059 0.0887059 0.147765)'),
+  { r: 23, g: 23, b: 38, a: 1 })
+assert.deepEqual(cp.parseCssRgba('color(srgb 1 0.972549 0.862745 / 0.94)'),
+  { r: 255, g: 248, b: 220, a: 0.94 })
+// alpha compositing onto the now-correctly-dark bg stays readable
+assert.equal(cp.solidColor('color(srgb 1 0.972549 0.862745 / 0.94)', 'rgb(23, 23, 38)'), 'rgb(241,234,209)')
+// the user symptom itself: a dark app must not snapshot to a light bg
+assert.equal(cp.isDarkColor('rgb(' + [cp.parseCssRgba('color(srgb 0.0887059 0.0887059 0.147765)').r,
+  cp.parseCssRgba('color(srgb 0.0887059 0.0887059 0.147765)').g,
+  cp.parseCssRgba('color(srgb 0.0887059 0.0887059 0.147765)').b].join(',') + ')'), true)
+console.log('SGRP_PARSE_TEST_OK')
